@@ -3,291 +3,119 @@ import urllib.parse
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
 import requests
+import pandas as pd
 import streamlit as st
 
 # 1. Настройка страницы
-st.set_page_config(
-    page_title="Каталоги Подарков 2026", page_icon="🍬", layout="centered"
-)
+st.set_page_config(page_title="Интеллектуальный Навигатор Подарков", page_icon="🍬", layout="wide")
 
-st.markdown(
-    """
+# АВТО-ОПРЕДЕЛЕНИЕ ГОДА СЕЗОНА
+now = datetime.datetime.now()
+# Если сейчас август и позже, ищем подарки на СЛЕДУЮЩИЙ год
+target_year = now.year + 1 if now.month >= 8 else now.year
+
+st.markdown("""
     <style>
-    .stApp { background-color: #f4f7f6; }
-    .catalog-card { 
-        background-color: #ffffff; border-left: 6px solid #28a745; 
-        padding: 18px; border-radius: 12px; margin-bottom: 12px;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.05);
-    }
-    .download-btn {
-        background-color: #28a745; color: white !important;
-        padding: 10px 20px; border-radius: 6px; text-decoration: none;
-        font-weight: bold; display: inline-block; margin-top: 8px;
-    }
-    .download-btn:hover { background-color: #218838; }
+    .stApp { background-color: #f8f9fa; }
+    .catalog-card { background-color: #ffffff; border-left: 6px solid #28a745; padding: 15px; border-radius: 10px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    .web-card { background-color: #ffffff; border-left: 6px solid #007bff; padding: 15px; border-radius: 10px; margin-bottom: 10px; }
     </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-st.title("🍬 Навигатор Подарков 2026")
-st.write(
-    "Введите название фабрики. Система найдет официальный сайт и вытянет прямую ссылку на каталог 2026."
-)
+st.title(f"🎄 Навигатор Подарков: Сезон {target_year}")
+st.caption(f"Автоматизированный поиск каталогов, прайсов и выгрузка товаров. Текущий поиск настроен на {target_year} год.")
 
-target_year = 2026
-
-# --- БАЗА БЫСТРОГО ДОСТУПА (Ускоряет поиск для известных брендов) ---
+# --- БАЗА И ФИЛЬТРЫ ---
 KNOWLEDGE_BASE = {
-    "лаконд": "lakond.ru",
-    "акконд": "akkond.ru",
-    "донко": "donko.su",
-    "тор": "donko.su",
-    "рубин": "rubin-2000.ru",
-    "дилявер": "dilaver.ru",
-    "главупак": "glavupak.ru",
-    "дедморозов": "dedmorozov.ru",
-    "коммунарка": "kommunarka.by",
-    "спартак": "spartak.by",
-    "рахат": "rakhat.kz",
-    "лоте рахат": "rakhat.kz",
-    "баян сулу": "bayansulu.kz",
-    "баянсулу": "bayansulu.kz",
-    "конфешн": "confashion.ru",
-    "саратовская кф": "confashion.ru",
-    "тореро": "torero.ru",
-    "абинекс": "abineks.ru",
-    "рэйд-21": "raid21.ru",
-    "сибпродторг": "sibprodtorg.ru",
-    "столичные поставки": "stolichnye.ru",
-    "униконф": "uniconf.ru",
-    "красный октябрь": "uniconf.ru",
-    "рот фронт": "uniconf.ru",
-    "бабаевский": "uniconf.ru",
-    "аленка": "podarki.alenka.ru",
-    "фортуна": "fortuna-podarki.ru",
-    "победа": "pobeda.market",
-    "славянка": "slavyanka.sendy.ru",
+    "лаконд": "lakond.ru", "акконд": "akkond.ru", "донко": "donko.su", "тор": "donko.su",
+    "рубин": "rubin-2000.ru", "дилявер": "dilaver.ru", "главупак": "glavupak.ru",
+    "дедморозов": "dedmorozov.ru", "коммунарка": "kommunarka.by", "спартак": "spartak.by",
+    "рахат": "rakhat.kz", "лоте рахат": "rakhat.kz", "баян сулу": "bayansulu.kz",
+    "конфешн": "confashion.ru", "тореро": "torero.ru", "победа": "pobeda.market", "славянка": "slavyanka.ru"
 }
 
-# Домены-справочники, которые мы игнорируем при авто-поиске сайтов
-JUNK_DOMAINS = [
-    "wikipedia.org",
-    "otzovik.com",
-    "avito.ru",
-    "list-org.com",
-    "checko.ru",
-    "audit-it.ru",
-    "synapsenet.ru",
-    "hh.ru",
-    "rabota.ru",
-    "pravo.ru",
-    "pravoved.ru",
-    "krasotaimedicina.ru",
-    "espn.com",
-    "365scores.com",
-]
+BAD_WORDS = ["медицина", "врач", "хоккей", "stock", "finance", "согласие", "политика"]
 
-# Списки фильтрации контента
-GOOD_EXT = [
-    ".pdf",
-    ".xls",
-    ".xlsx",
-    ".doc",
-    "/catalog/",
-    "/podarki/",
-    "/products/",
-    "/novogod",
-]
-GOOD_WORDS = [
-    "каталог",
-    "прайс",
-    "подарк",
-    "новогод",
-    "нг", "2026",
-    "лошад",
-    "catalog",
-    "price",
-    "podarki",
-]
-BAD_WORDS = [
-    "медицина",
-    "врач",
-    "рейтинг",
-    "отзывы",
-    "статья",
-    "wiki",
-    "hockey",
-    "хоккей",
-    "политика",
-    "данных",
-    "согласие",
-    "соглашение",
-    "вакансии",
-    "stock",
-    "finance",
-    "инвесторам",
-]
+# --- УМНЫЕ ФУНКЦИИ ---
 
-# --- ФУНКЦИИ ---
-
-
-def is_clean_link(text, href):
-    """Проверяет ссылку на актуальность и фильтрует мусор"""
-    full = (text + " " + href).lower()
-    if any(bad in full for bad in BAD_WORDS):
-        return False
-    if any(good in full for good in GOOD_WORDS) or any(
-        href.lower().endswith(ext) for ext in [".pdf", ".xls", ".xlsx"]
-    ):
-        return True
-    return False
-
-
-def scan_website(url):
-    """Заходит на сайт и вытаскивает все ссылки на каталоги/подарки"""
-    files = []
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        base_url = url if url.startswith("http") else f"http://{url}"
-        res = requests.get(base_url, headers=headers, timeout=8)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                href = a["href"].lower()
-                text = a.get_text().strip()
-
-                if is_clean_link(text, href):
-                    full_link = urllib.parse.urljoin(base_url, a["href"])
-                    title = text or "Каталог продукции / Прайс 2026"
-                    if full_link not in [f["link"] for f in files]:
-                        files.append({"title": title, "link": full_link})
-    except:
-        pass
-    return files
-
-
-def find_site_via_search(query):
-    """Универсальный поиск официального сайта для ЛЮБОЙ новой компании"""
+def find_site(query):
+    if query in KNOWLEDGE_BASE: return KNOWLEDGE_BASE[query]
     try:
         with DDGS() as ddgs:
-            q = f'"{query}" кондитерская фабрика официальный сайт -wiki -list-org'
-            res = list(ddgs.text(q, region="ru-ru", max_results=5))
+            q = f'"{query}" кондитерская фабрика официальный сайт -wiki'
+            res = list(ddgs.text(q, region='ru-ru', max_results=3))
             for r in res:
-                link = r["href"]
-                if not any(junk in link.lower() for junk in JUNK_DOMAINS):
-                    parsed = urllib.parse.urlparse(link)
-                    return parsed.netloc or link
-    except:
-        return None
-    return None
+                if not any(bad in r['href'] for bad in ["wikipedia", "checko", "list-org"]):
+                    return urllib.parse.urlparse(r['href']).netloc
+    except: return None
 
+def scan_for_files(url):
+    files = []
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(f"http://{url}", headers=headers, timeout=5)
+        soup = BeautifulSoup(res.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            h, t = a['href'].lower(), a.get_text().lower()
+            if any(ext in h for ext in [".pdf", ".xlsx", ".xls"]) or "каталог" in t or "прайс" in t:
+                if not any(bad in t for bad in BAD_WORDS):
+                    files.append({"title": a.get_text().strip() or "Файл", "link": urllib.parse.urljoin(f"http://{url}", a['href'])})
+    except: pass
+    return files
+
+def scrape_products(url):
+    """Пытается собрать список товаров, если нет PDF"""
+    products = []
+    try:
+        res = requests.get(f"http://{url}", headers={"User-Agent": "Mozilla/5.0"}, timeout=7)
+        soup = BeautifulSoup(res.text, "html.parser")
+        # Ищем типичные блоки товаров (h2, h3, h4 или блоки с классом product/item)
+        tags = soup.find_all(['h2', 'h3', 'h4', 'p', 'div'], string=True)
+        for tag in tags:
+            txt = tag.get_text().strip()
+            if 5 < len(txt) < 60 and any(keyword in txt.lower() for keyword in ["подарок", "набор", "конфет", "грамм", "г."]):
+                products.append({"Наименование": txt})
+    except: pass
+    return pd.DataFrame(products).drop_duplicates() if products else None
 
 # --- ИНТЕРФЕЙС ---
 
-company_input = st.text_input(
-    "Название компании или бренда:",
-    placeholder="Например: Лаконд, Баян Сулу, Красный Мозырянин...",
-)
+company_query = st.text_input("Введите название компании:", placeholder="Например: Баян Сулу")
 
-if st.button("🚀 ПОЛУЧИТЬ КАТАЛОГ 2026", type="primary"):
-    if not company_input.strip():
-        st.error("Введите название компании!")
-    else:
-        query = company_input.lower().strip()
-        st.write(f"🔍 Ищем информацию для: **{company_input.strip()}**")
-
-        # 1. Поиск в Базе Быстрого Доступа
-        target_site = None
-        for key, domain in KNOWLEDGE_BASE.items():
-            if key in query or query in key:
-                target_site = domain
-                break
-
-        # 2. Если в базе нет — динамически находит сайт в сети
-        if not target_site:
-            with st.spinner("Автоматически определяю официальный сайт..."):
-                target_site = find_site_via_search(query)
-
-        links = []
-
-        if target_site:
-            st.info(f"🌐 Найден официальный сайт: `{target_site}`")
-
-            # 3. Сканируем найденный сайт
-            with st.spinner("Извлекаю прямые ссылки на каталоги и прайсы..."):
-                links = scan_website(target_site)
-
-                # Если на главной пусто, пробуем прямой поиск PDF на этом домене
-                if not links:
-                    try:
-                        with DDGS() as ddgs:
-                            pdf_q = f"site:{target_site} (каталог OR прайс) (новогодние подарки OR 2026 OR лошад) filetype:pdf"
-                            extra = list(ddgs.text(pdf_q, max_results=5))
-                            for e in extra:
-                                links.append(
-                                    {"title": e["title"], "link": e["href"]}
-                                )
-                    except:
-                        pass
-
-        # Вывод результатов
-        st.markdown("---")
-        if links:
-            st.success(f"Найдено прямых ресурсов: {len(links)}")
-            unique_links = {l["link"]: l for l in links}.values()
-            for l in unique_links:
-                icon = (
-                    "📕 PDF"
-                    if ".pdf" in l["link"].lower()
-                    else ("📊 EXCEL" if ".xls" in l["link"].lower() else "🌐")
-                )
-                st.markdown(
-                    f"""
-                <div class="catalog-card">
-                    <h4 style="margin:0; font-size:16px;">{icon} | {l['title']}</h4>
-                    <a href="{l['link']}" target="_blank" class="download-btn">📥 СКАЧАТЬ / ОТКРЫТЬ ФАЙЛ 2026</a>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.warning(
-                "Автоматика не вытянула прямые файлы. Воспользуйтесь снайперскими кнопками ниже:"
-            )
-
-        # Резервный блок кнопок (гарантирует результат для менеджера)
-        st.write("### 🔍 Быстрый поиск в один клик:")
-        c1, c2, c3 = st.columns(3)
-
-        clean_q = urllib.parse.quote(
-            f'"{company_input.strip()}" новогодние подарки каталог 2026 -хоккей -stock'
-        )
-        xls_q = urllib.parse.quote(
-            f'"{company_input.strip()}" прайс новогодние подарки 2026 (xls OR pdf)'
-        )
-        vk_q = urllib.parse.quote(
-            f'"{company_input.strip()}" новогодние подарки 2026'
-        )
-
-        with c1:
-            st.link_button(
-                "📕 PDF в Google",
-                f"https://www.google.com/search?q={clean_q}+filetype:pdf",
-            )
-        with c2:
-            st.link_button(
-                "📊 Прайсы в Яндекс", f"https://yandex.ru/search/?text={xls_q}"
-            )
-        with c3:
-            st.link_button(
-                "📱 Группы в VK",
-                f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={vk_q}",
-            )
+if st.button("🚀 НАЙТИ И ВЫГРУЗИТЬ ДАННЫЕ", type="primary"):
+    if company_query:
+        q = company_query.lower().strip()
+        site = find_site(q)
+        
+        if site:
+            st.info(f"🌐 Работаем с сайтом: `{site}`")
+            
+            # Разделяем экран на две части
+            col_files, col_web = st.columns(2)
+            
+            with col_files:
+                st.subheader("📥 Готовые файлы (PDF/XLS)")
+                links = scan_for_files(site)
+                if links:
+                    for l in links:
+                        st.markdown(f"<div class='catalog-card'><b>{l['title']}</b><br><a href='{l['link']}' target='_blank'>📥 Скачать файл</a></div>", unsafe_allow_html=True)
+                else: st.warning("Прямых файлов не найдено.")
+            
+            with col_web:
+                st.subheader("📑 Состав каталога с сайта")
+                prod_df = scrape_products(site)
+                if prod_df is not None:
+                    st.write(f"Найдено позиций: {len(prod_df)}")
+                    st.dataframe(prod_df, use_container_width=True)
+                    csv = prod_df.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button("💾 Скачать этот перечень в Excel (CSV)", csv, f"{q}_products.csv", "text/csv")
+                else: st.info("Не удалось автоматически выделить список товаров со страницы.")
+            
+        else: st.error("Не удалось найти официальный сайт. Уточните название.")
 
 st.divider()
-st.caption(
-    "Автоматика настроена на сезон 2026 (Год Лошади). Финансовый и спортивный мусор отфильтровывается."
-)
+st.write("### 🔍 Резервный поиск")
+c1, c2, c3 = st.columns(3)
+with c1: st.link_button("Google PDF", f"https://www.google.com/search?q={company_query}+каталог+{target_year}+filetype:pdf")
+with c2: st.link_button("Яндекс Прайсы", f"https://yandex.ru/search/?text={company_query}+прайс+новогодний+{target_year}+xls")
+with c3: st.link_button("Поиск в VK", f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={company_query}+подарки+{target_year}")
