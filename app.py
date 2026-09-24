@@ -1,167 +1,117 @@
 import datetime
 import urllib.parse
+import requests
+from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
 import streamlit as st
 
-# Настройка страницы
-st.set_page_config(
-    page_title="Экспресс-Поиск Каталогов и Прайсов",
-    page_icon="⚡",
-    layout="centered",
-)
+# 1. Настройка страницы
+st.set_page_config(page_title="Поиск каталогов 2025", page_icon="🍬", layout="centered")
 
-# Определение года сезона
-now = datetime.datetime.now()
-target_year = now.year + 1 if now.month >= 8 else now.year
-
-# Стилизация под минималистичный корпоративный инструмент
-st.markdown(
-    """
+st.markdown("""
     <style>
-    .stApp { background-color: #f8f9fa; }
-    .main-title { font-size: 26px; font-weight: bold; color: #1e293b; margin-bottom: 5px; }
-    .sub-title { font-size: 14px; color: #64748b; margin-bottom: 25px; }
-    .file-card { background-color: #ffffff; border-left: 5px solid #10b981; padding: 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
-    .web-card { background-color: #ffffff; border-left: 5px solid #3b82f6; padding: 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
+    .file-card { background-color: #ffffff; border: 1px solid #e2e8f0; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #ff4b4b; }
+    .stButton>button { background-color: #ff4b4b; color: white; border-radius: 8px; font-weight: bold; }
     </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-st.markdown(
-    f"<div class='main-title'>⚡ Экспресс-поиск Прайсов и Каталогов {target_year}</div>",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    "<div class='sub-title'>Универсальный инструмент для коммерческого отдела. Мгновенно вытягивает файлы каталогов и прайсы без работы с поисковиками.</div>",
-    unsafe_allow_html=True,
-)
+# Определение года (Ставим 2025 как основной для текущего сезона)
+st.title("🍬 Универсальный поиск каталогов")
+target_year = st.selectbox("Выберите год для поиска:", [2024, 2025, 2026], index=1)
 
+# --- ФУНКЦИИ ---
 
-# Функция фонового поиска прямых документов
-def fetch_direct_assets(company_name, year):
-    pdf_files = []
-    excel_files = []
-    web_catalogs = []
+# Глубокий сканер сайта (ищет файлы прямо внутри домена)
+def deep_scan_site(url):
+    files = []
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            # Ищем все ссылки на PDF, XLS, XLSX
+            for a in soup.find_all("a", href=True):
+                link = a['href'].lower()
+                if any(ext in link for ext in [".pdf", ".xlsx", ".xls"]):
+                    full_url = urllib.parse.urljoin(url, a['href'])
+                    title = a.get_text(strip=True) or "Скачать каталог/прайс"
+                    files.append({"title": title, "url": full_url})
+    except:
+        pass
+    return files
 
-    # 1. Поиск файлов (PDF / XLSX)
-    file_query = f'"{company_name}" (новогодние подарки OR каталог OR прайс) {year} (filetype:pdf OR filetype:xlsx OR filetype:xls)'
-
+# Поиск через DuckDuckGo с фильтрами
+def smart_search(query):
+    results = []
     try:
         with DDGS() as ddgs:
-            # Ищем файлы
-            raw_files = list(ddgs.text(file_query, max_results=12))
-            for item in raw_files:
-                link = item.get("href", "")
-                title = item.get("title", "Файл каталога")
-                snippet = item.get("body", "")
-
-                if ".pdf" in link.lower():
-                    pdf_files.append(
-                        {"title": title, "link": link, "snippet": snippet}
-                    )
-                elif (
-                    ".xlsx" in link.lower()
-                    or ".xls" in link.lower()
-                    or "прайс" in title.lower()
-                ):
-                    excel_files.append(
-                        {"title": title, "link": link, "snippet": snippet}
-                    )
-
-            # 2. Если файлов мало, ищем прямую страницу интерактивного каталога
-            if len(pdf_files) == 0:
-                web_query = f'"{company_name}" каталог новогодних подарков {year} официальный сайт'
-                raw_web = list(ddgs.text(web_query, max_results=5))
-                for item in raw_web:
-                    link = item.get("href", "")
-                    title = item.get("title", "")
-                    if not any(
-                        bad in link
-                        for bad in ["wikipedia", "youtube", "otzovik", "avito"]
-                    ):
-                        web_catalogs.append(
-                            {
-                                "title": title,
-                                "link": link,
-                                "snippet": item.get("body", ""),
-                            }
-                        )
-
-    except Exception:
+            # Добавляем регион Россия и русский язык
+            ddg_gen = ddgs.text(query, region='ru-ru', safesearch='off', max_results=10)
+            for r in ddg_gen:
+                results.append(r)
+    except:
         pass
+    return results
 
-    return pdf_files, excel_files, web_catalogs
+# --- ИНТЕРФЕЙС ---
 
+query_input = st.text_input("Название компании или сайт (например: Лаконд, donko.su, Акконд):", placeholder="Введите здесь...")
 
-# Поле ввода
-company_input = st.text_input(
-    "Введите название компании, бренда или сайта:",
-    placeholder="Например: КФ Победа, Красный Мозырянин, glavupak.ru...",
-)
-
-if st.button("🚀 Получить каталог / прайс", type="primary", use_container_width=True):
-    if not company_input.strip():
-        st.warning("Пожалуйста, введите название компании.")
+if st.button("🚀 Найти все каталоги и файлы"):
+    if not query_input.strip():
+        st.error("Введите название!")
     else:
-        comp = company_input.strip()
-
-        with st.spinner("Сканируем сеть и извлекаем прямые файлы..."):
-            pdfs, excels, webs = fetch_direct_assets(comp, target_year)
-
+        q = query_input.strip()
+        st.write(f"### 🎯 Результаты для '{q}' на {target_year} год:")
+        
+        with st.spinner("Выполняю глубокий поиск документов..."):
+            
+            # 1. Сначала ищем официальный сайт
+            search_query = f"{q} официальный сайт новогодние подарки каталог {target_year}"
+            web_results = smart_search(search_query)
+            
+            found_anything = False
+            
+            # 2. Если в результатах есть ссылки, сканируем их на наличие PDF
+            if web_results:
+                for res in web_results[:3]: # Проверяем первые 3 результата
+                    site_url = res['href']
+                    st.write(f"🔎 Проверяю сайт: `{site_url}`")
+                    
+                    files_on_site = deep_scan_site(site_url)
+                    
+                    if files_on_site:
+                        found_anything = True
+                        for f in files_on_site:
+                            # Фильтруем, чтобы год был в названии или ссылке (или просто выводим всё)
+                            st.markdown(f"""
+                            <div class="file-card">
+                                <b>📄 {f['title']}</b><br>
+                                <a href="{f['url']}" target="_blank">📥 СКАЧАТЬ ФАЙЛ (PDF/XLS)</a>
+                            </div>
+                            """, unsafe_allow_html=True)
+            
+            # 3. Дополнительный поиск прямых PDF через поисковик
+            st.markdown("---")
+            st.write("### 🌍 Дополнительные находки в сети:")
+            direct_query = f"{q} новогодние подарки каталог {target_year} filetype:pdf"
+            direct_files = smart_search(direct_query)
+            
+            for item in direct_files:
+                if any(ext in item['href'].lower() for ext in [".pdf", ".xlsx", ".doc"]):
+                    found_anything = True
+                    st.markdown(f"✅ **[{item['title']}]({item['href']})**")
+                    st.caption(item['body'])
+            
+            if not found_anything:
+                st.warning("Автоматика не смогла скачать файл напрямую. Попробуйте нажать кнопку ниже для ручного просмотра.")
+                
+        # Резервные кнопки
         st.markdown("---")
-
-        # ВЫВОД РЕЗУЛЬТАТОВ: ТОЛЬКО ПРЯМЫЕ ССЫЛКИ НА ФАЙЛЫ ИЛИ СТРАНИЦЫ
-
-        # 1. Прямые PDF файлы
-        if pdfs:
-            st.success(f"✅ Найдены готовые PDF-каталоги ({len(pdfs)}):")
-            for f in pdfs[:4]:
-                st.markdown(
-                    f"""
-                <div class='file-card'>
-                    <h4>📄 {f['title']}</h4>
-                    <p style='font-size: 13px; color: #475569;'>{f['snippet'][:180]}...</p>
-                    <a href='{f['link']}' target='_blank' style='background-color: #10b981; color: white; padding: 8px 16px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;'>📥 Скачать / Открыть PDF</a>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-
-        # 2. Прямые Excel прайсы
-        if excels:
-            st.success(f"📊 Найдены Excel-прайсы / Таблицы ({len(excels)}):")
-            for f in excels[:3]:
-                st.markdown(
-                    f"""
-                <div class='file-card' style='border-left-color: #059669;'>
-                    <h4>📊 {f['title']}</h4>
-                    <a href='{f['link']}' target='_blank' style='background-color: #059669; color: white; padding: 8px 16px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;'>📥 Скачать Прайс (Excel)</a>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-
-        # 3. Интерактивные веб-страницы каталогов (если PDF нет)
-        if webs and not pdfs:
-            st.info("🌐 Прямой PDF не опубликован, но найдена страница онлайн-каталога:")
-            for w in webs[:3]:
-                st.markdown(
-                    f"""
-                <div class='web-card'>
-                    <h4>🌐 {w['title']}</h4>
-                    <p style='font-size: 13px; color: #475569;'>{w['snippet'][:180]}...</p>
-                    <a href='{w['link']}' target='_blank' style='background-color: #3b82f6; color: white; padding: 8px 16px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;'>🔗 Открыть веб-каталог на сайте</a>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-
-        # 4. Если вообще ничего не найдено автоматически
-        if not pdfs and not excels and not webs:
-            st.error(
-                "Файлы не найдены в открытом доступе. Возможно, компания высылает прайс только по запросу."
-            )
-            st.write("Попробуйте прямой поиск по соцсетям:")
-            vk_url = f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={urllib.parse.quote(comp + ' новогодние подарки прайс ' + str(target_year))}"
-            st.link_button("🔵 Проверить выложен ли прайс ВКонтакте", vk_url)
+        c1, c2 = st.columns(2)
+        with c1:
+            g_url = f"https://www.google.com/search?q={urllib.parse.quote(q + ' каталог ' + str(target_year) + ' pdf')}"
+            st.link_button("🔎 Открыть поиск Google", g_url)
+        with c2:
+            vk_url = f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={urllib.parse.quote(q + ' новогодние подарки ' + str(target_year))}"
+            st.link_button("📱 Искать в VK (Прайсы)", vk_url)
