@@ -3,144 +3,151 @@ import requests
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
 import urllib.parse
-import re
+import datetime
 
 # 1. Настройка страницы
-st.set_page_config(page_title="Экстрактор каталогов 2026", page_icon="🍬", layout="centered")
+st.set_page_config(page_title="Каталоги Подарков 2026", page_icon="🍬", layout="centered")
 
 st.markdown("""
     <style>
-    .reportview-container { background: #f8f9fa; }
-    .download-card { 
-        background-color: #ffffff; 
-        border: 2px solid #28a745; 
-        padding: 20px; 
-        border-radius: 12px; 
-        margin-bottom: 15px; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+    .stApp { background-color: #f4f7f6; }
+    .catalog-card { 
+        background-color: #ffffff; border-left: 6px solid #e91e63; 
+        padding: 20px; border-radius: 10px; margin-bottom: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    .btn-download {
-        background-color: #28a745;
-        color: white !important;
-        padding: 10px 20px;
-        border-radius: 6px;
-        text-decoration: none;
-        font-weight: bold;
-        display: inline-block;
-        margin-top: 10px;
+    .download-btn {
+        background-color: #e91e63; color: white !important;
+        padding: 10px 20px; border-radius: 6px; text-decoration: none;
+        font-weight: bold; display: inline-block; margin-top: 10px;
     }
-    .btn-download:hover { background-color: #218838; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🍬 Экстрактор подарков 2026")
-st.write("Введите название фабрики. Программа сама найдет и вытянет прямую ссылку на скачивание файла.")
+st.title("🍬 Навигатор Подарков 2026")
+st.write("Введите название фабрики. Система найдет официальный сайт и вытянет каталог.")
 
-# Установка года сезона
-target_year = 2026
+# --- БАЗА ЗНАНИЙ (Для 100% точности по вашему списку) ---
+KNOWLEDGE_BASE = {
+    "лаконд": "lakond.ru",
+    "акконд": "akkond.ru",
+    "донко": "donko.su",
+    "тор": "donko.su",
+    "рубин": "rubin-2000.ru",
+    "дилявер": "dilaver.ru",
+    "главупак": "glavupak.ru",
+    "дедморозов": "dedmorozov.ru",
+    "коммунарка": "kommunarka.by",
+    "спартак": "spartak.by",
+    "рахат": "rakhat.kz",
+    "лоте рахат": "rakhat.kz",
+    "конфешн": "confashion.ru",
+    "саратовская кф": "confashion.ru",
+    "тореро": "torero.ru",
+    "абинекс": "abineks.ru",
+    "рэйд-21": "raid21.ru",
+    "сибпродторг": "sibprodtorg.ru",
+    "столичные поставки": "stolichnye.ru",
+    "униконф": "uniconf.ru",
+    "красный октябрь": "uniconf.ru",
+    "рот фронт": "uniconf.ru",
+    "бабаевский": "uniconf.ru",
+    "аленка": "podarki.alenka.ru",
+    "фортуна": "fortuna-podarki.ru"
+}
 
-# --- МОЗГ ПРОГРАММЫ ---
+# Списки фильтрации
+GOOD_EXT = [".pdf", ".xls", ".xlsx", ".doc", "/catalog/", "/podarki/", "/products/"]
+BAD_WORDS = ["медицина", "врач", "рейтинг", "отзывы", "статья", "wiki", "hockey", "хоккей", "политика", "данных", "согласие"]
 
-def is_valid_catalog(text, link):
-    """Проверяет, является ли ссылка реальным каталогом подарков"""
-    content = (text + link).lower()
-    # Обязательные слова
-    positive = ["каталог", "прайс", "подарки", "новогод", "нг", "из конфет", "catalog", "price", "pdf", "xls"]
-    # Мусор (хоккей, акции, юристы)
-    negative = ["hockey", "хоккей", "stock", "finance", "акции", "инвест", "политика", "данных", "privacy", "agreement", "согласие"]
-    
-    if any(neg in content for neg in negative):
-        return False
-    if any(pos in content for pos in positive):
-        return True
-    return False
+# --- ФУНКЦИИ ---
 
-def get_direct_files(query):
-    """Ищет в сети прямые ссылки на PDF и Excel"""
-    found_files = []
-    
-    # Формируем жесткий поисковый запрос, чтобы отсечь лишнее
-    search_q = f'"{query}" кондитерская фабрика новогодние подарки каталог {target_year} filetype:pdf OR filetype:xlsx'
-    
+def scan_website(url):
+    """Заходит на сайт и вытаскивает все ссылки на каталоги/подарки"""
+    files = []
     try:
-        with DDGS() as ddgs:
-            # Ищем именно файлы
-            res = list(ddgs.text(search_q, region='ru-ru', max_results=15))
-            for item in res:
-                link = item['href']
-                title = item['title']
+        headers = {"User-Agent": "Mozilla/5.0"}
+        base_url = url if url.startswith("http") else f"http://{url}"
+        res = requests.get(base_url, headers=headers, timeout=8)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a['href'].lower()
+                text = a.get_text().lower()
                 
-                if is_valid_catalog(title, link):
-                    found_files.append({"title": title, "url": link})
+                # Ищем признаки каталога
+                if any(ext in href for ext in GOOD_EXT) or any(kw in text for kw in ["каталог", "прайс", "подарки", "2026"]):
+                    if not any(bad in text or bad in href for bad in BAD_WORDS):
+                        full_link = urllib.parse.urljoin(base_url, a['href'])
+                        files.append({"title": a.get_text().strip() or "Каталог/Прайс", "link": full_link})
     except:
         pass
-    return found_files
+    return files
 
-def scan_official_site(query):
-    """Находит сайт компании и пытается вытянуть файлы оттуда"""
+def find_site_via_search(query):
+    """Поиск сайта, если его нет в базе знаний"""
     try:
         with DDGS() as ddgs:
-            # 1. Находим основной сайт
-            res = list(ddgs.text(f"{query} официальный сайт кондитерская фабрика", region='ru-ru', max_results=3))
-            if res:
-                base_url = res[0]['href']
-                # 2. Заходим на сайт и ищем ссылки на PDF
-                headers = {"User-Agent": "Mozilla/5.0"}
-                resp = requests.get(base_url, headers=headers, timeout=7)
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    site_files = []
-                    for a in soup.find_all("a", href=True):
-                        href = a['href']
-                        text = a.get_text()
-                        if is_valid_catalog(text, href):
-                            full_url = urllib.parse.urljoin(base_url, href)
-                            site_files.append({"title": text.strip() or "Каталог на сайте", "url": full_url})
-                    return site_files
+            # Жесткий запрос: название + отрасль
+            q = f'"{query}" кондитерская фабрика подарки официальный сайт'
+            res = list(ddgs.text(q, region='ru-ru', max_results=3))
+            for r in res:
+                link = r['href']
+                if not any(bad in link for bad in ["medicina", "pravo", "wiki", "otzovik"]):
+                    return link
     except:
-        pass
-    return []
+        return None
 
 # --- ИНТЕРФЕЙС ---
 
-company = st.text_input("Введите название компании (например: Лаконд):", placeholder="Название фабрики...")
+company_input = st.text_input("Название компании:", placeholder="Например: Лаконд или Акконд")
 
-if st.button("🚀 ПОЛУЧИТЬ ПРЯМУЮ ССЫЛКУ", type="primary"):
-    if not company:
+if st.button("🚀 ПОЛУЧИТЬ КАТАЛОГ 2026", type="primary"):
+    if not company_input:
         st.error("Введите название!")
     else:
-        st.write(f"🔍 Сканирую сеть для **{company}** на сезон **{target_year}**...")
+        query = company_input.lower().strip()
+        st.write(f"🔍 Анализирую: **{query}**")
         
-        with st.spinner("Извлекаю прямые ссылки на файлы..."):
-            # Метод 1: Поиск файлов в сети
-            links = get_direct_files(company)
+        # 1. Проверяем Базу Знаний
+        target_site = KNOWLEDGE_BASE.get(query)
+        
+        # 2. Если в базе нет, ищем сайт через поиск
+        if not target_site:
+            with st.spinner("Ищу официальный сайт фабрики..."):
+                target_site = find_site_via_search(query)
+        
+        if target_site:
+            st.info(f"🌐 Найден сайт: `{target_site}`. Извлекаю файлы каталогов...")
             
-            # Метод 2: Поиск на официальном сайте
-            links += scan_official_site(company)
-            
-            # Убираем дубликаты
-            unique_links = {l['url']: l for l in links}.values()
-            
-            st.markdown("---")
-            
-            if unique_links:
-                st.success(f"Найдено ресурсов: {len(unique_links)}")
+            # 3. Сканируем сайт на наличие PDF/XLS
+            with st.spinner("Сканирую разделы подарков..."):
+                links = scan_website(target_site)
+                
+                # Если на самом сайте пусто, пробуем найти прямые PDF в сети для этой фабрики
+                if not links:
+                    with DDGS() as ddgs:
+                        pdf_q = f'site:{target_site} каталог новогодние подарки 2026 filetype:pdf'
+                        extra = list(ddgs.text(pdf_q, max_results=5))
+                        for e in extra:
+                            links.append({"title": e['title'], "link": e['href']})
+
+            # Вывод результатов
+            if links:
+                st.success(f"Найдено ресурсов: {len(links)}")
+                unique_links = {l['link']: l for l in links}.values()
                 for l in unique_links:
-                    icon = "📕" if ".pdf" in l['url'].lower() else "📊"
-                    if not ".pdf" in l['url'].lower() and not ".xls" in l['url'].lower():
-                        icon = "🌐"
-                        
                     st.markdown(f"""
-                    <div class="download-card">
-                        <h4 style="margin:0;">{icon} {l['title']}</h4>
-                        <p style="font-size:12px; color:gray;">Источник: {urllib.parse.urlparse(l['url']).netloc}</p>
-                        <a href="{l['url']}" target="_blank" class="btn-download">📥 СКАЧАТЬ ФАЙЛ / ОТКРЫТЬ</a>
+                    <div class="catalog-card">
+                        <h4 style="margin:0;">📦 {l['title']}</h4>
+                        <a href="{l['link']}" target="_blank" class="download-btn">📥 СКАЧАТЬ КАТАЛОГ / ПРАЙС 2026</a>
                     </div>
                     """, unsafe_allow_html=True)
             else:
-                st.error("Прямых ссылок на файлы 2026 года не найдено.")
-                st.info("💡 Совет: Многие фабрики еще не выложили каталоги 2026 в открытый доступ. Попробуйте найти их в VK:")
-                st.link_button("🔎 Искать прайсы в ВКонтакте", f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={urllib.parse.quote(company + ' подарки 2026')}")
+                st.warning("Прямых ссылок на файлы не найдено. Попробуйте зайти на сайт вручную.")
+                st.link_button("🔗 Перейти на сайт", f"http://{target_site}")
+        else:
+            st.error("Не удалось найти сайт компании. Уточните название.")
 
 st.divider()
-st.caption("Система автоматически фильтрует финансовые новости, спорт и юридические документы.")
+st.caption("База знаний обновлена: Лаконд, Акконд и др. теперь находятся мгновенно.")
