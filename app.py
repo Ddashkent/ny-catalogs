@@ -1,396 +1,215 @@
 import datetime
+import re
 import urllib.parse
-import pandas as pd
+from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
+import requests
 import streamlit as st
 
-# 1. Настройки страницы
+# 1. Конфигурация страницы
 st.set_page_config(
-    page_title="Навигатор по Новогодним Каталогам", page_icon="🎄", layout="wide"
+    page_title="Поисковик Новогодних Каталогов и Прайсов",
+    page_icon="🎁",
+    layout="wide",
 )
 
-# Определение года по умолчанию
+# Вычисление актуального сезона
 now = datetime.datetime.now()
 default_year = now.year + 1 if now.month >= 8 else now.year
 
-st.title("🎄 Универсальный Навигатор по Новогодним Каталогам")
+st.title("🎁 Автоматический Движок Поиска Каталогов и Прайсов")
 st.caption(
-    "Инструмент для коммерческого отдела: мониторинг клиентов, поставщиков и конкурентов"
+    "Универсальный инструмент: ищет прямые PDF-файлы, Excel-прайсы и официальные новогодние страницы любых компаний."
 )
 
-# Выбор года в боковой панели
+# Боковая панель
 with st.sidebar:
-    st.header("⚙️ Настройки поиска")
+    st.header("⚙️ Параметры поиска")
     target_year = st.number_input(
-        "Сезон Нового Года:", min_value=2024, max_value=2030, value=default_year
+        "Целевой год каталога:",
+        min_value=2024,
+        max_value=2030,
+        value=default_year,
     )
-    st.info(f"Поиск настроен на каталоги **{target_year}** года.")
+    search_type = st.radio(
+        "Что ищем в первую очередь?",
+        [
+            "📄 Прямые файлы (PDF / Excel / Прайсы)",
+            "🌐 Веб-страницы каталогов",
+            "📱 Поиск в соцсетях (VK / Telegram)",
+        ],
+    )
 
 
-# 2. База данных компаний
-@st.cache_data
-def load_data():
-    raw_data = [
-        # Объединенные кондитеры
-        {
-            "Компания": "ОК - Единый каталог (Униконф)",
-            "Холдинг/Тип": "Объединенные кондитеры",
-            "Менеджер": "Общий отдел",
-            "Домен": "uniconf.ru",
-            "Регион": "РФ",
-            "Alt": "https://www.uniconf.ru/catalog/novogodnie-podarki/",
-        },
-        {
-            "Компания": "ОК - Корпоративный отдел (Аленка)",
-            "Холдинг/Тип": "Объединенные кондитеры",
-            "Менеджер": "Общий отдел",
-            "Домен": "podarki.alenka.ru",
-            "Регион": "РФ",
-            "Alt": "https://podarki.alenka.ru/",
-        },
-        {
-            "Компания": "ОК - КФ Красный Октябрь",
-            "Холдинг/Тип": "Объединенные кондитеры",
-            "Менеджер": "Общий отдел",
-            "Домен": "redoct.ru",
-            "Регион": "Москва",
-            "Alt": "-",
-        },
-        {
-            "Компания": "ОК - КФ Рот Фронт / Профсоюз",
-            "Холдинг/Тип": "Объединенные кондитеры",
-            "Менеджер": "Общий отдел",
-            "Домен": "rotfront.ru",
-            "Регион": "Москва",
-            "Alt": "-",
-        },
-        {
-            "Компания": "ОК - КК Бабаевский",
-            "Холдинг/Тип": "Объединенные кондитеры",
-            "Менеджер": "Общий отдел",
-            "Домен": "babaev.ru",
-            "Регион": "Москва",
-            "Alt": "-",
-        },
-        # Крупные фабрики и упаковка
-        {
-            "Компания": "Акконд",
-            "Холдинг/Тип": "Завод",
-            "Менеджер": "Менеджер 1",
-            "Домен": "akkond.ru",
-            "Регион": "Чебоксары",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Рубин",
-            "Холдинг/Тип": "Упаковка / Наборы",
-            "Менеджер": "Менеджер 2",
-            "Домен": "rubin-2000.ru",
-            "Регион": "РФ",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Дилявер",
-            "Холдинг/Тип": "Упаковка / Наборы",
-            "Менеджер": "Менеджер 2",
-            "Домен": "dilaver.ru",
-            "Регион": "Москва",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Дедморозов / ГлавУпак",
-            "Холдинг/Тип": "Упаковка",
-            "Менеджер": "Менеджер 3",
-            "Домен": "glavupak.ru",
-            "Регион": "Москва",
-            "Alt": "https://dedmorozov.ru/",
-        },
-        {
-            "Компания": "Коммунарка",
-            "Холдинг/Тип": "Завод (СНГ)",
-            "Менеджер": "Менеджер 1",
-            "Домен": "kommunarka.by",
-            "Регион": "Беларусь",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Спартак",
-            "Холдинг/Тип": "Завод (СНГ)",
-            "Менеджер": "Менеджер 1",
-            "Домен": "spartak.by",
-            "Регион": "Беларусь",
-            "Alt": "-",
-        },
-        {
-            "Компания": "АО ЛОТТЕ РАХАТ",
-            "Холдинг/Тип": "Завод (СНГ)",
-            "Менеджер": "Менеджер 1",
-            "Домен": "rakhat.kz",
-            "Регион": "Казахстан",
-            "Alt": "-",
-        },
-        # Региональные и ДНР
-        {
-            "Компания": "ТОР ООО / ДонКо ООО",
-            "Холдинг/Тип": "Завод / Регион",
-            "Менеджер": "Менеджер 3",
-            "Домен": "donko.su",
-            "Регион": "ДНР",
-            "Alt": "https://vk.com/donko_official",
-        },
-        {
-            "Компания": "ЛАКОНД, ТД / Скайд",
-            "Холдинг/Тип": "Завод / Регион",
-            "Менеджер": "Менеджер 3",
-            "Домен": "lakond.ru",
-            "Регион": "ДНР",
-            "Alt": "https://vk.com/",
-        },
-        {
-            "Компания": "Саратовская КФ (Конфешн)",
-            "Холдинг/Тип": "Завод",
-            "Менеджер": "Менеджер 2",
-            "Домен": "confashion.ru",
-            "Регион": "Саратов",
-            "Alt": "-",
-        },
-        {
-            "Компания": "КФ Тореро",
-            "Холдинг/Тип": "Завод",
-            "Менеджер": "Менеджер 2",
-            "Домен": "torero.ru",
-            "Регион": "Москва",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Абинекс (Абин)",
-            "Холдинг/Тип": "Дистрибьютор",
-            "Менеджер": "Менеджер 1",
-            "Домен": "abineks.ru",
-            "Регион": "Казань",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Подарки-сладки (Саляхов)",
-            "Холдинг/Тип": "Дистрибьютор",
-            "Менеджер": "Менеджер 1",
-            "Домен": "podarki-sladki.ru",
-            "Регион": "Казань",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Рэйд-21",
-            "Холдинг/Тип": "Дистрибьютор",
-            "Менеджер": "Менеджер 2",
-            "Домен": "raid21.ru",
-            "Регион": "Уфа",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Сибпродторг",
-            "Холдинг/Тип": "Дистрибьютор",
-            "Менеджер": "Менеджер 2",
-            "Домен": "sibprodtorg.ru",
-            "Регион": "Тюмень",
-            "Alt": "-",
-        },
-        {
-            "Компания": "Столичные поставки",
-            "Холдинг/Тип": "Корп. подарки",
-            "Менеджер": "Менеджер 3",
-            "Домен": "stolichnye.ru",
-            "Регион": "Москва",
-            "Alt": "-",
-        },
-        # Локальные поставщики / ИП
-        {
-            "Компания": "Купец (Адамас)",
-            "Холдинг/Тип": "ИП / Локальный",
-            "Менеджер": "Менеджер 3",
-            "Домен": "-",
-            "Регион": "ДНР",
-            "Alt": "Запрос прайса напрямую",
-        },
-        {
-            "Компания": "ИП Толстов",
-            "Холдинг/Тип": "ИП / Локальный",
-            "Менеджер": "Менеджер 2",
-            "Домен": "-",
-            "Регион": "Барнаул",
-            "Alt": "Запрос прайса напрямую",
-        },
-        {
-            "Компания": "ИП Кусова / Караева / Зангиев",
-            "Холдинг/Тип": "ИП / Локальный",
-            "Менеджер": "Менеджер 1",
-            "Домен": "-",
-            "Регион": "Владикавказ",
-            "Alt": "Запрос прайса напрямую",
-        },
-        {
-            "Компания": "Ёвар / ИП Сарыева",
-            "Холдинг/Тип": "СНГ / Сеть",
-            "Менеджер": "Менеджер 1",
-            "Домен": "yovar.tj",
-            "Регион": "Таджикистан",
-            "Alt": "Соцсети / Instagram",
-        },
-        {
-            "Компания": "Элит Шант / ЮРМЕНШИН",
-            "Холдинг/Тип": "СНГ / Производитель",
-            "Менеджер": "Менеджер 1",
-            "Домен": "-",
-            "Регион": "Армения",
-            "Alt": "Facebook / Соцсети",
-        },
-    ]
-    return pd.DataFrame(raw_data)
+# 2. Модуль Умного Поиска через DuckDuckGo API
+def search_duckduckgo(query, max_results=10):
+    try:
+        results = []
+        with DDGS() as ddgs:
+            ddg_gen = ddgs.text(query, max_results=max_results)
+            if ddg_gen:
+                for r in ddg_gen:
+                    results.append(
+                        {
+                            "title": r.get("title", ""),
+                            "link": r.get("href", ""),
+                            "snippet": r.get("body", ""),
+                        }
+                    )
+        return results
+    except Exception as e:
+        st.error(f"Ошибка обращения к поисковому серверу: {e}")
+        return []
 
 
-df = load_data()
-
-
-# Функции поисковых ссылок
-def get_google_link(target, year):
-    if "." in target and " " not in target:
-        q = f"site:{target} новогодние подарки каталог {year}"
+# 3. Модуль прямой проверки сайта (если ввели домен)
+def scan_website_for_pdfs(domain, year):
+    if not domain.startswith("http"):
+        url = f"https://{domain}"
     else:
-        q = f"{target} новогодние подарки каталог {year} pdf"
-    return "https://www.google.com/search?q=" + urllib.parse.quote(q)
+        url = domain
+
+    found_files = []
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                # Ищем ссылки на PDF, XLS и упоминания каталога/прайса
+                if any(
+                    ext in href.lower()
+                    for ext in [".pdf", ".xlsx", ".xls", ".doc"]
+                ) or any(
+                    kw in href.lower()
+                    for kw in ["catalog", "price", "novogod", "podarki"]
+                ):
+                    full_link = urllib.parse.urljoin(url, href)
+                    title = a.get_text(strip=True) or "Скачать документ"
+                    found_files.append({"title": title, "link": full_link})
+    except Exception:
+        pass
+    return found_files
 
 
-def get_yandex_link(target, year):
-    q = f"{target} новогодние подарки каталог {year}"
-    return "https://yandex.ru/search/?text=" + urllib.parse.quote(q)
+# --- ОСНОВНОЙ ИНТЕРФЕЙС ---
 
-
-# Интерфейс
-tab1, tab2, tab3 = st.tabs(
-    [
-        "🔍 Поиск по компании",
-        "👨‍💼 Мой пул (По менеджерам)",
-        "📊 База компаний",
-    ]
+user_query = st.text_input(
+    "🔎 Введите название компании, бренд, фабрику или сайт:",
+    placeholder="Например: Красный Мозырянин, КФ Победа, glavupak.ru, ИП Сарыева...",
 )
 
-# ----------------- ВКЛАДКА 1: ПОИСК -----------------
-with tab1:
-    st.subheader("Поиск каталогов любого контрагента")
-
-    mode = st.radio(
-        "Режим поиска:",
-        ["📋 Выбрать из базы", "✍️ Ввести название или сайт вручную"],
-        horizontal=True,
-    )
-
-    query_target = ""
-    comp_title = ""
-    alt_link = "-"
-
-    if mode == "📋 Выбрать из базы":
-        selected_company = st.selectbox(
-            "Выберите компанию из списка:", df["Компания"].unique()
-        )
-        row = df[df["Компания"] == selected_company].iloc[0]
-
-        c_left, c_right = st.columns(2)
-        with c_left:
-            st.metric("Тип / Категория", str(row["Холдинг/Тип"]))
-            st.metric("Регион", str(row["Регион"]))
-        with c_right:
-            st.metric("Ответственный", str(row["Менеджер"]))
-            st.metric("Официальный домен", str(row["Домен"]))
-
-        if str(row["Домен"]) != "-":
-            query_target = str(row["Домен"])
-        else:
-            query_target = str(row["Компания"])
-
-        comp_title = str(row["Компания"])
-        alt_link = str(row["Alt"])
-
+if st.button("🚀 Найти актуальный каталог / прайс", type="primary"):
+    if not user_query.strip():
+        st.warning("Пожалуйста, введите запрос для поиска!")
     else:
-        custom_input = st.text_input(
-            "Введите название компании, бренд или адрес сайта:",
-            placeholder="Например: Славянка или kf-pobeda.ru",
-        )
-        if custom_input.strip():
-            query_target = custom_input.strip()
-            comp_title = custom_input.strip()
-        else:
-            st.warning(
-                "Введите имя или сайт компании выше, чтобы сформировать кнопки поиска."
-            )
-
-    if query_target:
+        query = user_query.strip()
         st.markdown("---")
-        st.write(f"### 🔗 Результаты поиска для: **{comp_title}**")
+        st.subheader(
+            f"🎯 Результаты поиска каталогов на {target_year} год для: **{query}**"
+        )
 
-        g_url = get_google_link(query_target, target_year)
-        y_url = get_yandex_link(comp_title, target_year)
+        # Проверка: ввели сайт или просто название?
+        is_domain = (
+            "." in query
+            and " " not in query
+            and not query.endswith(".")
+            and len(query) > 3
+        )
 
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            st.link_button(f"🔍 Найти в Google ({target_year})", g_url)
-        with b2:
-            st.link_button("🟡 Найти в Яндексе", y_url)
-        with b3:
-            if alt_link not in ["-", "Запрос прайса напрямую"]:
-                st.link_button("📌 Доп. канал / VK", alt_link)
+        with st.spinner("Идет сканирование сети и поиск файлов..."):
+
+            # --- ЭТАП 1: Сканирование сайта напрямую (если введен домен) ---
+            if is_domain:
+                st.info(f"🌐 Обнаружен прямой сайт `{query}`. Сканируем структуру...")
+                site_files = scan_website_for_pdfs(query, target_year)
+                if site_files:
+                    st.success(
+                        f"Найдено документов прямо на сайте: {len(site_files)}"
+                    )
+                    for item in site_files[:5]:
+                        st.markdown(f"👉 [{item['title']}]({item['link']})")
+                else:
+                    st.write(
+                        "Прямых файлов на главной странице не обнаружено, выполняем глубокий поиск..."
+                    )
+
+            # --- ЭТАП 2: Поиск прямых документов (PDF/XLS) ---
+            if "Прямые файлы" in search_type or is_domain:
+                st.write("### 📄 Найденные файлы каталогов и прайс-листов:")
+
+                file_query = f"{query} (новогодние подарки OR каталог OR прайс) {target_year} filetype:pdf OR filetype:xlsx"
+                file_results = search_duckduckgo(file_query, max_results=8)
+
+                # Фильтруем результаты, где действительно есть файлы или каталоги
+                pdfs_found = 0
+                for item in file_results:
+                    link = item["link"]
+                    if any(
+                        ext in link.lower()
+                        for ext in [".pdf", ".xlsx", ".xls", ".doc"]
+                    ) or any(
+                        kw in link.lower()
+                        for kw in [
+                            "catalog",
+                            "price",
+                            "novogod",
+                            "podark",
+                            "2025",,
+                            "2026",
+                        ]
+                    ):
+                        pdfs_found += 1
+                        st.markdown(f"📥 **[{item['title']}]({link})**")
+                        st.caption(
+                            f"Ссылка: {link}\n\n_{item['snippet'][:150]}..._"
+                        )
+                        st.markdown("---")
+
+                if pdfs_found == 0:
+                    st.warning(
+                        "Прямых PDF/Excel файлов в открытом доступе не найдено. Смотрите разделы на сайтах ниже 👇"
+                    )
+
+            # --- ЭТАП 3: Поиск веб-страниц и веб-каталогов ---
+            st.write("### 🌐 Официальные страницы и веб-каталоги:")
+            web_query = f"{query} новогодние подарки каталог {target_year}"
+            web_results = search_duckduckgo(web_query, max_results=6)
+
+            if web_results:
+                for item in web_results:
+                    st.markdown(f"🔗 **[{item['title']}]({item['link']})**")
+                    st.write(f"_{item['snippet']}_")
+                    st.markdown("---")
             else:
-                st.write("*(Нет доп. ссылки)*")
+                st.write("Страниц по строгому запросу не найдено.")
 
-# ----------------- ВКЛАДКА 2: МЕНЕДЖЕРЫ -----------------
-with tab2:
-    st.subheader("Закрепленный пул компаний")
-    manager = st.selectbox("Выберите менеджера:", df["Менеджер"].unique())
+            # --- ЭТАП 4: Поиск в Соцсетях (для ИП, ДНР, локальных поставщиков) ---
+            st.write("### 📱 Поиск прайсов в VK / Telegram / Соцсетях:")
+            social_query = (
+                f"{query} новогодние подарки прайс каталог {target_year} vk.com"
+            )
+            social_results = search_duckduckgo(social_query, max_results=3)
 
-    mgr_df = df[df["Менеджер"] == manager].copy()
+            if social_results:
+                for item in social_results:
+                    st.markdown(f"💬 **[{item['title']}]({item['link']})**")
+            else:
+                st.write("Записей в соцсетях не найдено.")
 
-    mgr_df["Google Ссылка"] = mgr_df.apply(
-        lambda r: get_google_link(
-            r["Домен"] if r["Домен"] != "-" else r["Компания"], target_year
-        ),
-        axis=1,
-    )
-
-    mgr_df["Яндекс Ссылка"] = mgr_df.apply(
-        lambda r: get_yandex_link(r["Компания"], target_year), axis=1
-    )
-
-    st.write(f"Компаний у менеджера: **{len(mgr_df)}**")
-
-    st.dataframe(
-        mgr_df[
-            [
-                "Компания",
-                "Холдинг/Тип",
-                "Регион",
-                "Домен",
-                "Google Ссылка",
-                "Яндекс Ссылка",
-            ]
-        ],
-        column_config={
-            "Google Ссылка": st.column_config.LinkColumn("Google"),
-            "Яндекс Ссылка": st.column_config.LinkColumn("Яндекс"),
-        },
-        hide_index=True,
-        use_container_width=True,
-    )
-
-# ----------------- ВКЛАДКА 3: БАЗА -----------------
-with tab3:
-    st.subheader("Реестр компаний")
-    search_term = st.text_input("Фильтр (название, город или тип):")
-
-    if search_term.strip():
-        term = search_term.strip()
-        filtered_df = df[
-            df["Компания"].str.contains(term, case=False)
-            | df["Регион"].str.contains(term, case=False)
-            | df["Холдинг/Тип"].str.contains(term, case=False)
-        ]
-    else:
-        filtered_df = df
-
-    st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+        # Резервные кнопки быстрых переходов
+        st.markdown("---")
+        st.write("### 🚀 Если нужный файл закрыт, открыть поиск в один клик:")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            g_url = f"https://www.google.com/search?q={urllib.parse.quote(query + ' новогодние подарки каталог ' + str(target_year) + ' filetype:pdf')}"
+            st.link_button(f"🔍 Google (Поиск PDF {target_year})", g_url)
+        with c2:
+            y_url = f"https://yandex.ru/search/?text={urllib.parse.quote(query + ' новогодние подарки каталог прайс ' + str(target_year))}"
+            st.link_button(f"🟡 Яндекс (Поиск прайсов)", y_url)
+        with c3:
+            vk_url = f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={urllib.parse.quote(query + ' новогодние подарки ' + str(target_year))}"
+            st.link_button(f"🔵 Поиск ВКонтакте", vk_url)
