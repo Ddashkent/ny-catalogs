@@ -1,122 +1,100 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
 import urllib.parse
-import re
 
 # 1. Настройка страницы
-st.set_page_config(page_title="Экстрактор каталогов 2026", page_icon="🍬", layout="centered")
+st.set_page_config(page_title="Навигатор Подарков 2026", page_icon="🍬", layout="centered")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #f8f9fa; }
-    .download-card { 
-        background-color: #ffffff; border: 2px solid #28a745; 
-        padding: 25px; border-radius: 15px; margin-bottom: 20px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    .stApp { background-color: #f4f7f6; }
+    .search-card { 
+        background-color: #ffffff; 
+        border: 2px solid #ff4b4b; 
+        padding: 25px; 
+        border-radius: 15px; 
+        margin-bottom: 20px; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
         text-align: center;
     }
-    .btn-download {
-        background-color: #28a745; color: white !important;
-        padding: 15px 30px; border-radius: 10px; text-decoration: none;
-        font-weight: bold; display: inline-block; font-size: 18px;
-        transition: 0.3s;
+    .btn-link { 
+        background-color: #ff4b4b; 
+        color: white !important; 
+        padding: 14px 25px; 
+        border-radius: 10px; 
+        text-decoration: none; 
+        font-weight: bold; 
+        display: block; 
+        text-align: center;
+        margin-top: 15px;
+        font-size: 18px;
     }
-    .btn-download:hover { background-color: #218838; transform: scale(1.05); }
-    .info-text { color: #666; font-size: 14px; margin-bottom: 10px; }
+    .btn-link:hover { background-color: #d43f3f; transform: scale(1.02); transition: 0.2s; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🍬 Авто-Экстрактор Каталогов 2026")
-st.write("Введите название фабрики. Система сама найдет и выведет **прямую кнопку на скачивание** каталога.")
+st.title("🍬 Навигатор Подарков 2026")
+st.write("Универсальный поиск каталогов и прайсов на сезон **2026 (Год Лошади)**.")
 
-# --- УМНАЯ ЛОГИКА ПОИСКА ---
+# --- ВВОД ДАННЫХ ---
+query = st.text_input("Введите название фабрики или бренда:", placeholder="Например: Лаконд, Баян Сулу, Акконд...")
 
-def is_catalog_link(text, url):
-    """Проверяет, является ли ссылка реальным каталогом новогодних подарков"""
-    c = (text + url).lower()
-    # Исключаем мусор сразу
-    if any(bad in c for bad in ["policy", "privacy", "согласие", "вакансии", "хоккей", "акции", "инвест"]):
-        return False
-    # Ищем признаки подарков 2026 (Год Лошади)
-    keywords = ["каталог", "прайс", "подарки", "2026", "лошад", "нг", "новогод", "catalog", "price", "pdf", "xlsx"]
-    return any(k in c for k in keywords)
+if query:
+    q = query.strip()
+    target_year = 2026
+    st.markdown("---")
+    st.subheader(f"🎯 Сформированы снайперские ссылки для: {q}")
 
-def get_direct_catalog(query):
-    """Ищет прямые ссылки на файлы в сети"""
-    results = []
-    # Запрос: Название + Новогодние подарки 2026 / Год лошади
-    search_q = f'"{query}" кондитерская фабрика новогодние подарки каталог 2026 OR "год лошади" filetype:pdf OR filetype:xlsx'
+    # ЖЕСТКИЙ ФИЛЬТР МУСОРА (Хоккей, Акции, Медицина)
+    trash_filter = "-hockey -хоккей -nhl -scores -stock -finance -инвестиции -медицина -вакансии"
     
-    try:
-        with DDGS() as ddgs:
-            resp = ddgs.text(search_q, region='ru-ru', max_results=10)
-            for r in resp:
-                if is_catalog_link(r['title'], r['href']):
-                    results.append({"title": r['title'], "url": r['href']})
-    except:
-        pass
-    return results
+    # 1. PDF Каталоги (Google лучше ищет PDF)
+    pdf_query = urllib.parse.quote(f'"{q}" кондитерская фабрика новогодние подарки каталог {target_year} filetype:pdf {trash_filter}')
+    
+    # 2. Excel Прайсы (Яндекс лучше находит прайсы в СНГ)
+    xls_query = urllib.parse.quote(f'"{q}" новогодние подарки прайс-лист {target_year} (xls OR xlsx) {trash_filter}')
+    
+    # 3. Соцсети (VK часто единственный источник для ДНР и мелких ИП)
+    vk_query = urllib.parse.quote(f'"{q}" новогодние подарки {target_year}')
+    
+    # 4. Официальный сайт (поиск через Яндекс)
+    site_query = urllib.parse.quote(f'"{q}" кондитерская фабрика официальный сайт подарки {target_year}')
 
-def scan_official_site(query):
-    """Находит сайт и сканирует его на наличие кнопок 'Скачать'"""
-    try:
-        with DDGS() as ddgs:
-            # Находим сайт
-            site_search = list(ddgs.text(f"{query} официальный сайт кондитерская фабрика", max_results=2))
-            if site_search:
-                url = site_search[0]['href']
-                res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
-                soup = BeautifulSoup(res.text, "html.parser")
-                links = []
-                for a in soup.find_all("a", href=True):
-                    if is_catalog_link(a.get_text(), a['href']):
-                        full_url = urllib.parse.urljoin(url, a['href'])
-                        links.append({"title": a.get_text().strip() or "Каталог на сайте", "url": full_url})
-                return links
-    except:
-        return []
-    return []
+    # ОТОБРАЖЕНИЕ КАРТОЧЕК
+    col1, col2 = st.columns(2)
 
-# --- ИНТЕРФЕЙС ---
+    with col1:
+        st.markdown(f"""
+        <div class="search-card" style="border-color: #dc3545;">
+            <h2 style="margin:0; color:#dc3545;">📕 PDF КАТАЛОГ</h2>
+            <p style="font-size:14px; color:#666;">Прямые ссылки на PDF презентации <b>2026 (Год Лошади)</b></p>
+            <a href="https://www.google.com/search?q={pdf_query}" target="_blank" class="btn-link" style="background-color: #dc3545;">📥 ОТКРЫТЬ КАТАЛОГ</a>
+        </div>
+        """, unsafe_allow_html=True)
 
-name = st.text_input("Название фабрики (например: Лаконд, Баян Сулу, Акконд):", placeholder="Введите название...")
+        st.markdown(f"""
+        <div class="search-card" style="border-color: #007bff;">
+            <h2 style="margin:0; color:#007bff;">🔵 ПРАЙСЫ В VK</h2>
+            <p style="font-size:14px; color:#666;">Поиск выложенных прайсов в группах ВКонтакте</p>
+            <a href="https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={vk_query}" target="_blank" class="btn-link" style="background-color: #007bff;">📱 ИСКАТЬ В ВК</a>
+        </div>
+        """, unsafe_allow_html=True)
 
-if st.button("🚀 ПОЛУЧИТЬ ПРЯМУЮ ССЫЛКУ", type="primary"):
-    if not name:
-        st.error("Введите название!")
-    else:
-        st.write(f"🔍 Ищу каталог **{name}** на сезон **2026 (Год Лошади)**...")
-        
-        with st.spinner("Работаю... Вытягиваю прямые ссылки на документы..."):
-            # Пробуем найти прямые файлы
-            final_links = get_direct_catalog(name)
-            
-            # Если в сети мало файлов, лезем на официальный сайт
-            if len(final_links) < 2:
-                final_links += scan_official_site(name)
-            
-            # Убираем дубликаты
-            unique = {l['url']: l for l in final_links}.values()
-            
-            st.markdown("---")
-            
-            if unique:
-                st.success(f"Найдено ресурсов: {len(unique)}")
-                for l in unique:
-                    icon = "📕" if ".pdf" in l['url'].lower() else "📊"
-                    st.markdown(f"""
-                    <div class="download-card">
-                        <div class="info-text">Найдено: {l['title']}</div>
-                        <a href="{l['url']}" target="_blank" class="btn-download">📥 СКАЧАТЬ КАТАЛОГ {icon}</a>
-                        <div style="margin-top:10px; font-size:11px; color:#aaa;">Источник: {urllib.parse.urlparse(l['url']).netloc}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.error("Прямая ссылка на файл не найдена автоматически.")
-                st.info("💡 **Совет:** Попробуйте уточнить название (например, 'Лаконд Донецк') или используйте поиск в VK, так как многие файлы еще закрыты паролями на сайтах.")
-                st.link_button("📱 Искать прайс в ВКонтакте", f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={urllib.parse.quote(name + ' подарки 2026')}")
+    with col2:
+        st.markdown(f"""
+        <div class="search-card" style="border-color: #28a745;">
+            <h2 style="margin:0; color:#28a745;">📊 EXCEL ПРАЙС</h2>
+            <p style="font-size:14px; color:#666;">Поиск таблиц с ценами и составами подарков <b>2026</b></p>
+            <a href="https://yandex.ru/search/?text={xls_query}" target="_blank" class="btn-link" style="background-color: #28a745;">📥 ОТКРЫТЬ ПРАЙСЫ</a>
+        </div>
+        """, unsafe_allow_html=True)
 
-st.divider()
-st.caption("Приложение настроено на поиск каталогов 2026 года (символ: Лошадь). Весь мусор отсекается автоматически.")
+        st.markdown(f"""
+        <div class="search-card" style="border-color: #ffc107;">
+            <h2 style="margin:0; color:#856404;">🌐 САЙТ ФАБРИКИ</h2>
+            <p style="font-size:14px; color:#666;">Переход в раздел продукции на официальном сайте</p>
+            <a href="https://yandex.ru/search/?text={site_query}" target="_blank" class="btn-link" style="background-color: #ffc107; color: black !important;">🔗 ПЕРЕЙТИ НА САЙТ</a>
+        </div>
+        """, unsafe_allow_html=True)
+
+else:
+    st.info("Введите название фабрики (например, Лаконд или Баян Сулу), чтобы мгновенно получить снайперские ссылки на каталоги 2026 года.")
