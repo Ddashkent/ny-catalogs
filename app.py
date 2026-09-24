@@ -8,25 +8,22 @@ st.set_page_config(
     page_title="Навигатор по Новогодним Каталогам", page_icon="🎄", layout="wide"
 )
 
-# Определение актуального года (автоматически или ручной выбор)
+# Определение года по умолчанию
 now = datetime.datetime.now()
 default_year = now.year + 1 if now.month >= 8 else now.year
 
 st.title("🎄 Универсальный Навигатор по Новогодним Каталогам")
 st.caption(
-    "Инструмент для менеджеров: мониторинг клиентов, поставщиков и конкурентов"
+    "Инструмент для коммерческого отдела: мониторинг клиентов, поставщиков и конкурентов"
 )
 
-# Выбор года в сайдбаре
+# Выбор года в боковой панели
 with st.sidebar:
     st.header("⚙️ Настройки поиска")
     target_year = st.number_input(
-        "Сезон Нового Года:",
-        min_value=2024,
-        max_value=2030,
-        value=default_year,
+        "Сезон Нового Года:", min_value=2024, max_value=2030, value=default_year
     )
-    st.info(f"Сейчас поиск настроен на каталоги **{target_year}** года.")
+    st.info(f"Поиск настроен на каталоги **{target_year}** года.")
 
 
 # 2. База данных компаний
@@ -252,21 +249,21 @@ def load_data():
 df = load_data()
 
 
-# Вспомогательные функции генерации ссылок
-def get_google_pdf_link(domain_or_name, year):
-    if "." in domain_or_name and not " " in domain_or_name:
-        query = f"site:{domain_or_name} новогодние подарки каталог {year}"
+# Функции поисковых ссылок
+def get_google_link(target, year):
+    if "." in target and " " not in target:
+        q = f"site:{target} новогодние подарки каталог {year}"
     else:
-        query = f"{domain_or_name} новогодние подарки каталог {year} pdf"
-    return f"https://www.google.com/search?q={urllib.parse.quote(query)}"
+        q = f"{target} новогодние подарки каталог {year} pdf"
+    return "https://www.google.com/search?q=" + urllib.parse.quote(q)
 
 
-def get_yandex_link(name, year):
-    query = f"{name} новогодние подарки каталог {year}"
-    return f"https://yandex.ru/search/?text={urllib.parse.quote(query)}"
+def get_yandex_link(target, year):
+    q = f"{target} новогодние подарки каталог {year}"
+    return "https://yandex.ru/search/?text=" + urllib.parse.quote(q)
 
 
-# Создаем вкладки
+# Интерфейс
 tab1, tab2, tab3 = st.tabs(
     [
         "🔍 Поиск по компании",
@@ -275,7 +272,7 @@ tab1, tab2, tab3 = st.tabs(
     ]
 )
 
-# ----------------- ВКЛАДКА 1: Поиск -----------------
+# ----------------- ВКЛАДКА 1: ПОИСК -----------------
 with tab1:
     st.subheader("Поиск каталогов любого контрагента")
 
@@ -285,16 +282,115 @@ with tab1:
         horizontal=True,
     )
 
+    query_target = ""
+    comp_title = ""
+    alt_link = "-"
+
     if mode == "📋 Выбрать из базы":
         selected_company = st.selectbox(
-            "Выберите компанию:", df["Компания"].unique()
+            "Выберите компанию из списка:", df["Компания"].unique()
         )
         row = df[df["Компания"] == selected_company].iloc[0]
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Тип / Категория", row["Холдинг/Тип"])
-            st.metric("Регион", row["Регион"])
-        with col2:
-            st.metric("Ответственный", row["Менеджер"])
-            st.metric("Официальный домен", 
+        c_left, c_right = st.columns(2)
+        with c_left:
+            st.metric("Тип / Категория", str(row["Холдинг/Тип"]))
+            st.metric("Регион", str(row["Регион"]))
+        with c_right:
+            st.metric("Ответственный", str(row["Менеджер"]))
+            st.metric("Официальный домен", str(row["Домен"]))
+
+        if str(row["Домен"]) != "-":
+            query_target = str(row["Домен"])
+        else:
+            query_target = str(row["Компания"])
+
+        comp_title = str(row["Компания"])
+        alt_link = str(row["Alt"])
+
+    else:
+        custom_input = st.text_input(
+            "Введите название компании, бренд или адрес сайта:",
+            placeholder="Например: Славянка или kf-pobeda.ru",
+        )
+        if custom_input.strip():
+            query_target = custom_input.strip()
+            comp_title = custom_input.strip()
+        else:
+            st.warning(
+                "Введите имя или сайт компании выше, чтобы сформировать кнопки поиска."
+            )
+
+    if query_target:
+        st.markdown("---")
+        st.write(f"### 🔗 Результаты поиска для: **{comp_title}**")
+
+        g_url = get_google_link(query_target, target_year)
+        y_url = get_yandex_link(comp_title, target_year)
+
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            st.link_button(f"🔍 Найти в Google ({target_year})", g_url)
+        with b2:
+            st.link_button("🟡 Найти в Яндексе", y_url)
+        with b3:
+            if alt_link not in ["-", "Запрос прайса напрямую"]:
+                st.link_button("📌 Доп. канал / VK", alt_link)
+            else:
+                st.write("*(Нет доп. ссылки)*")
+
+# ----------------- ВКЛАДКА 2: МЕНЕДЖЕРЫ -----------------
+with tab2:
+    st.subheader("Закрепленный пул компаний")
+    manager = st.selectbox("Выберите менеджера:", df["Менеджер"].unique())
+
+    mgr_df = df[df["Менеджер"] == manager].copy()
+
+    mgr_df["Google Ссылка"] = mgr_df.apply(
+        lambda r: get_google_link(
+            r["Домен"] if r["Домен"] != "-" else r["Компания"], target_year
+        ),
+        axis=1,
+    )
+
+    mgr_df["Яндекс Ссылка"] = mgr_df.apply(
+        lambda r: get_yandex_link(r["Компания"], target_year), axis=1
+    )
+
+    st.write(f"Компаний у менеджера: **{len(mgr_df)}**")
+
+    st.dataframe(
+        mgr_df[
+            [
+                "Компания",
+                "Холдинг/Тип",
+                "Регион",
+                "Домен",
+                "Google Ссылка",
+                "Яндекс Ссылка",
+            ]
+        ],
+        column_config={
+            "Google Ссылка": st.column_config.LinkColumn("Google"),
+            "Яндекс Ссылка": st.column_config.LinkColumn("Яндекс"),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+# ----------------- ВКЛАДКА 3: БАЗА -----------------
+with tab3:
+    st.subheader("Реестр компаний")
+    search_term = st.text_input("Фильтр (название, город или тип):")
+
+    if search_term.strip():
+        term = search_term.strip()
+        filtered_df = df[
+            df["Компания"].str.contains(term, case=False)
+            | df["Регион"].str.contains(term, case=False)
+            | df["Холдинг/Тип"].str.contains(term, case=False)
+        ]
+    else:
+        filtered_df = df
+
+    st.dataframe(filtered_df, use_container_width=True, hide_index=True)
