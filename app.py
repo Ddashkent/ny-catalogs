@@ -1,110 +1,106 @@
 import streamlit as st
 import urllib.parse
 import datetime
-from duckduckgo_search import DDGS
 
 # 1. Настройка страницы
-st.set_page_config(page_title="Навигатор Подарков 2026", page_icon="🍬", layout="centered")
+st.set_page_config(page_title="Поиск новогодних каталогов", page_icon="🍬", layout="centered")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #f8f9fa; }
-    .catalog-card { 
-        background-color: #ffffff; border-left: 6px solid #ff4b4b; 
-        padding: 20px; border-radius: 12px; margin-bottom: 15px;
+    .stApp { background-color: #f4f7f6; }
+    .search-card { 
+        background-color: #ffffff; 
+        border: 2px solid #007bff; 
+        padding: 20px; 
+        border-radius: 12px; 
+        margin-bottom: 15px;
         box-shadow: 0 4px 10px rgba(0,0,0,0.05);
     }
-    .download-btn {
-        background-color: #ff4b4b; color: white !important;
-        padding: 12px 24px; border-radius: 8px; text-decoration: none;
-        font-weight: bold; display: inline-block; margin-top: 10px; text-align: center;
+    .btn-link {
+        background-color: #007bff; color: white !important;
+        padding: 12px 20px; border-radius: 8px; text-decoration: none;
+        font-weight: bold; display: block; text-align: center;
+        margin-top: 10px;
     }
-    .download-btn:hover { background-color: #d43f3f; }
+    .btn-link:hover { background-color: #0056b3; }
+    .pdf-style { border-color: #dc3545; }
+    .pdf-btn { background-color: #dc3545; }
+    .pdf-btn:hover { background-color: #a71d2a; }
+    .xls-style { border-color: #28a745; }
+    .xls-btn { background-color: #28a745; }
+    .xls-btn:hover { background-color: #1e7e34; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🍬 Навигатор Подарков 2026")
-st.write("Введите название ЛЮБОЙ фабрики. Программа вытянет прямые ссылки на каталоги и прайсы.")
+st.title("🍬 Навигатор Новогодних Каталогов")
+st.write("Универсальный поиск каталогов и прайсов любых фабрик СНГ (Лаконд, Баян Сулу, Акконд и др.)")
 
-# Выбор года
-target_year = 2026
+# --- НАСТРОЙКИ ПОИСКА ---
+col_y, col_q = st.columns([1, 3])
+with col_y:
+    target_year = st.selectbox("Год сезона:", [2025, 2026], index=0)
+with col_q:
+    query = st.text_input("Введите название фабрики:", placeholder="Например: Лаконд")
 
-# --- ЛОГИКА ПОИСКА ---
+if query:
+    q = query.strip()
+    st.markdown("---")
+    st.subheader(f"🎯 Сформированы снайперские ссылки для {q} ({target_year}):")
 
-def get_clean_catalogs(query):
-    found = []
-    # Формируем запрос, который отсекает акции, спорт и медицину
-    # Ищем: "Название" новогодние подарки каталог 2026
-    search_query = f'"{query}" (кондитерская фабрика OR подарки) (каталог OR прайс) {target_year} filetype:pdf OR filetype:xlsx'
+    # Формируем запросы с фильтрацией мусора
+    # Исключаем хоккей, акции, медицину, инвесторов
+    filter_trash = "-хоккей -hockey -stock -finance -акции -инвестиции -медицина -вакансии"
     
-    try:
-        with DDGS() as ddgs:
-            # Ищем на русском языке
-            results = list(ddgs.text(search_query, region='ru-ru', max_results=10))
-            for res in results:
-                link = res['href'].lower()
-                title = res['title'].lower()
-                
-                # ЖЕСТКИЙ ФИЛЬТР МУСОРА
-                bad_stuff = ["stock", "finance", "хоккей", "hockey", "медицина", "право", "политика", "данных", "согласие"]
-                if any(bad in link or bad in title for bad in bad_stuff):
-                    continue
-                
-                # ПРОВЕРКА НА ПОЛЕЗНОСТЬ
-                good_stuff = ["каталог", "прайс", "подарки", "pdf", "xls", "2026", "catalog", "price"]
-                if any(good in link or good in title for good in good_stuff):
-                    found.append({
-                        "title": res['title'],
-                        "link": res['href'],
-                        "snippet": res['body']
-                    })
-    except:
-        pass
-    return found
+    # 1. Запрос для PDF каталогов
+    pdf_q = urllib.parse.quote(f'"{q}" кондитерская фабрика новогодние подарки каталог {target_year} filetype:pdf {filter_trash}')
+    
+    # 2. Запрос для Excel прайсов
+    xls_q = urllib.parse.quote(f'"{q}" новогодние подарки прайс-лист {target_year} (xls OR xlsx) {filter_trash}')
+    
+    # 3. Запрос для VK (для ИП и тех, у кого нет сайта)
+    vk_q = urllib.parse.quote(f'"{q}" новогодние подарки {target_year}')
+    
+    # 4. Официальный сайт (поиск раздела продукции)
+    site_q = urllib.parse.quote(f'"{q}" кондитерская фабрика официальный сайт подарки {target_year}')
 
-# --- ИНТЕРФЕЙС ---
+    # ОТОБРАЖЕНИЕ КАРТОЧЕК
+    c1, c2 = st.columns(2)
 
-company_name = st.text_input("Введите название компании (например: Баян Сулу, Лаконд, Акконд):", placeholder="Название или бренд...")
+    with c1:
+        st.markdown(f"""
+        <div class="search-card pdf-style">
+            <h3 style="margin:0; color:#dc3545;">📕 PDF КАТАЛОГИ</h3>
+            <p style="font-size:13px; color:#666;">Поиск прямых PDF-файлов с презентацией подарков на {target_year} год.</p>
+            <a href="https://yandex.ru/search/?text={pdf_q}" target="_blank" class="btn-link pdf-btn">📥 НАЙТИ PDF КАТАЛОГИ</a>
+        </div>
+        """, unsafe_allow_html=True)
 
-if st.button("🚀 НАЙТИ КАТАЛОГ / ПРАЙС 2026", type="primary"):
-    if not company_name.strip():
-        st.warning("Пожалуйста, введите название.")
-    else:
-        q = company_name.strip()
-        st.write(f"### 🎯 Результаты для: {q}")
-        
-        with st.spinner(f"Ищу прямые ссылки на файлы {target_year} года..."):
-            items = get_clean_catalogs(q)
-            
-            if items:
-                st.success(f"Найдено полезных ресурсов: {len(items)}")
-                for item in items:
-                    # Определяем тип файла для иконки
-                    icon = "📕 PDF" if ".pdf" in item['link'].lower() else "📊 EXCEL / ПРАЙС"
-                    
-                    st.markdown(f"""
-                    <div class="catalog-card">
-                        <h4 style="margin:0; color:#1e293b;">{icon} | {item['title']}</h4>
-                        <p style="font-size:13px; color:#64748b; margin:10px 0;">{item['snippet'][:200]}...</p>
-                        <a href="{item['link']}" target="_blank" class="download-btn">📥 СКАЧАТЬ ФАЙЛ</a>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.error("Прямых ссылок на файлы не найдено. Попробуйте уточнить название.")
-                
-        # Резервные кнопки (всегда выручают менеджера)
-        st.markdown("---")
-        st.write("### 🔍 Если файл не найден автоматически:")
-        col1, col2 = st.columns(2)
-        
-        # Ссылки для ручного перехода
-        g_q = urllib.parse.quote(f'"{q}" новогодние подарки каталог {target_year} filetype:pdf')
-        vk_q = urllib.parse.quote(f'"{q}" подарки прайс 2026')
-        
-        with col1:
-            st.link_button("📂 Искать PDF в Google", f"https://www.google.com/search?q={g_q}")
-        with col2:
-            st.link_button("📱 Искать прайсы в VK", f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={vk_q}")
+        st.markdown(f"""
+        <div class="search-card" style="border-color: #007bff;">
+            <h3 style="margin:0; color:#007bff;">🔵 СОЦСЕТИ / VK</h3>
+            <p style="font-size:13px; color:#666;">Поиск прайсов в ВКонтакте (актуально для фабрик ДНР и локальных ИП).</p>
+            <a href="https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={vk_q}" target="_blank" class="btn-link">📱 ИСКАТЬ В ВК</a>
+        </div>
+        """, unsafe_allow_html=True)
 
-st.divider()
-st.caption(f"Поиск настроен на сезон {target_year}. Мусор (хоккей, акции, юристы) отсекается автоматически.")
+    with c2:
+        st.markdown(f"""
+        <div class="search-card xls-style">
+            <h3 style="margin:0; color:#28a745;">📊 EXCEL ПРАЙСЫ</h3>
+            <p style="font-size:13px; color:#666;">Поиск таблиц с ценами, весом и составами подарков.</p>
+            <a href="https://yandex.ru/search/?text={xls_q}" target="_blank" class="btn-link xls-btn">📥 НАЙТИ EXCEL ПРАЙСЫ</a>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="search-card" style="border-color: #ffc107;">
+            <h3 style="margin:0; color:#856404;">🌐 САЙТ ФАБРИКИ</h3>
+            <p style="font-size:13px; color:#666;">Переход на официальный сайт компании в раздел новогодней продукции.</p>
+            <a href="https://yandex.ru/search/?text={site_q}" target="_blank" class="btn-link" style="background-color: #ffc107; color: black !important;">🔗 ПЕРЕЙТИ НА САЙТ</a>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.success("💡 **Инструкция:** Если по 2026 году ничего не найдено (фабрика еще не обновилась), переключите год на **2025** вверху страницы.")
+
+else:
+    st.info("Введите название компании выше, чтобы мгновенно получить ссылки на её каталоги.")
