@@ -5,148 +5,108 @@ from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
 import streamlit as st
 
-# 1. Настройка страницы
-st.set_page_config(page_title="Снайпер-поиск каталогов 2025", page_icon="🎯", layout="centered")
+# 1. Настройка интерфейса (Минимализм)
+st.set_page_config(page_title="Поиск новогодних каталогов", page_icon="🍬")
 
 st.markdown("""
     <style>
-    .result-card { background-color: #ffffff; border: 1px solid #e2e8f0; padding: 15px; border-radius: 10px; margin-bottom: 12px; border-left: 5px solid #00c853; }
-    .stButton>button { background-color: #00c853; color: white; border-radius: 8px; width: 100%; font-weight: bold; }
+    .catalog-card { background-color: #f8f9fa; border: 2px solid #28a745; padding: 20px; border-radius: 12px; margin-bottom: 15px; }
+    .btn-main { background-color: #28a745; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🎯 Снайпер-поиск подарков")
-st.caption("Поиск ТОЛЬКО новогодних каталогов и прайсов. Без политики конфиденциальности и юр. мусора.")
+st.title("🍬 Экспресс-поиск каталогов")
+st.write("Введите название фабрики. Программа сама найдет сайт и вытянет прямую ссылку на каталог.")
 
-# Выбор года
-target_year = st.selectbox("Год сезона:", [2024, 2025, 2026], index=1)
+# Текущий год
+year = 2025
 
-# --- СПИСКИ ФИЛЬТРАЦИИ ---
-# Эти слова ОБЯЗАТЕЛЬНО должны быть в названии ссылки или файла
-WHITELIST = ["каталог", "прайс", "подарки", "новогод", "нг", str(target_year), "catalog", "price", "podarki", "ассортимент"]
+# Ключевые слова для "вкусного" поиска
+GOOD_WORDS = ["каталог", "прайс", "подарки", "новогод", "нг", "из конфет", "catalog", "price", "pdf", "xls"]
+# Мусор, который мы удаляем
+BAD_WORDS = ["политика", "конфиденциальность", "персональные", "данные", "согласие", "акции", "инвесторам", "stock", "finance"]
 
-# Эти слова ЗАПРЕЩЕНЫ (юр. мусор)
-BLACKLIST = [
-    "политика", "конфиденциальность", "персональных", "данных", "согласие", 
-    "соглашение", "обработку", "вакансии", "инн", "огрн", "устав", "privacy", 
-    "policy", "agreement", "узнать подробнее", "статьи", "новости"
-]
+# --- МОЗГ ПРИЛОЖЕНИЯ ---
 
-# Запрещенные домены (юр. порталы, справочники)
-BLOCKED_DOMAINS = [
-    "pravo.rg.ru", "pravoved.ru", "nasledstvovrf.ru", "consultant.ru", "garant.ru", 
-    "audit-it.ru", "zakon.ru", "wikipedia.org", "otzovik.com", "avito.ru"
-]
+def find_official_site(name):
+    """Находит официальный сайт компании по названию"""
+    try:
+        with DDGS() as ddgs:
+            # Ищем официальный сайт
+            res = list(ddgs.text(f"{name} официальный сайт кондитерская фабрика", max_results=3))
+            if res:
+                return res[0]['href']
+    except:
+        return None
+    return None
 
-# --- ФУНКЦИИ ---
-
-def is_clean_link(text, url):
-    """Проверяет ссылку на соответствие новогодней тематике и отсутствие мусора"""
-    full_content = (text + url).lower()
-    
-    # 1. Проверка на мусорные слова
-    if any(bad in full_content for bad in BLACKLIST):
-        return False
-    
-    # 2. Проверка на полезные слова (хотя бы одно должно быть)
-    if not any(good in full_content for good in WHITELIST):
-        return False
-        
-    return True
-
-def deep_scan_site(url):
-    """Сканирует сайт на наличие прямых PDF/XLS файлов с подарками"""
-    if any(b_domain in url for b_domain in BLOCKED_DOMAINS):
-        return []
-        
-    files = []
+def scan_site_for_catalogs(url):
+    """Заходит на сайт и ищет ссылки на документы"""
+    catalogs = []
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        response = requests.get(url, headers=headers, timeout=8)
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
             for a in soup.find_all("a", href=True):
-                text = a.get_text(strip=True)
+                text = a.get_text().lower().strip()
                 link = a['href'].lower()
                 
-                # Ищем только документы
-                if any(ext in link for ext in [".pdf", ".xlsx", ".xls"]):
-                    # Применяем фильтр "новогодней темы"
-                    if is_clean_link(text, link):
+                # Фильтр: это должна быть ссылка на документ или раздел подарков
+                if any(good in text or good in link for good in GOOD_WORDS):
+                    # Проверка на мусор
+                    if not any(bad in text or bad in link for bad in BAD_WORDS):
                         full_url = urllib.parse.urljoin(url, a['href'])
-                        files.append({"title": text or "Документ", "url": full_url})
+                        title = a.get_text().strip() or "Открыть каталог / раздел"
+                        if full_url not in [c['link'] for c in catalogs]:
+                            catalogs.append({"title": title, "link": full_url})
     except:
         pass
-    return files
-
-def fetch_search_results(query):
-    results = []
-    try:
-        with DDGS() as ddgs:
-            # Делаем запрос максимально специфичным
-            final_query = f"{query} новогодние подарки кондитерские изделия каталог {target_year}"
-            ddg_gen = ddgs.text(final_query, region='ru-ru', max_results=15)
-            for r in ddg_gen:
-                if not any(b_domain in r['href'] for b_domain in BLOCKED_DOMAINS):
-                    results.append(r)
-    except:
-        pass
-    return results
+    return catalogs
 
 # --- ИНТЕРФЕЙС ---
 
-q_input = st.text_input("Введите название компании (Лаконд, Акконд и т.д.):", placeholder="Регистр не важен...")
+company_name = st.text_input("Введите название компании (например: Лаконд или lakond.ru):", placeholder="Название или сайт...")
 
-if st.button("🚀 НАЙТИ КАТАЛОГИ И ПРАЙСЫ"):
-    if not q_input.strip():
-        st.error("Введите название!")
+if st.button("🚀 НАЙТИ КАТАЛОГ", type="primary"):
+    if not company_name:
+        st.warning("Введите название компании")
     else:
-        q = q_input.strip()
-        st.write(f"### 🔍 Ищем подарки для '{q}'...")
-        
-        with st.spinner("Фильтруем мусор, ищем каталоги..."):
-            web_results = fetch_search_results(q)
+        with st.spinner(f"Захожу на сайт {company_name} и ищу каталоги..."):
             
-            found_files = []
-            
-            # 1. Проверяем сайты из поиска
-            if web_results:
-                for res in web_results[:5]:
-                    site_files = deep_scan_site(res['href'])
-                    found_files.extend(site_files)
-            
-            # 2. Прямой поиск PDF файлов в сети
-            pdf_query = f"{q} новогодние подарки каталог {target_year} filetype:pdf"
-            pdf_results = fetch_search_results(pdf_query)
-            for p in pdf_results:
-                if is_clean_link(p['title'], p['href']):
-                    found_files.append({"title": p['title'], "url": p['href']})
-
-            # Убираем дубликаты
-            unique_files = {f['url']: f for f in found_files}.values()
-
-            # ВЫВОД РЕЗУЛЬТАТОВ
-            if unique_files:
-                st.success(f"Найдено документов: {len(unique_files)}")
-                for f in unique_files:
-                    st.markdown(f"""
-                    <div class="result-card">
-                        <div style="font-size: 16px; font-weight: bold; color: #1b5e20;">📦 {f['title']}</div>
-                        <a href="{f['url']}" target="_blank" style="color: #00c853; text-decoration: none; font-weight: bold;">📥 СКАЧАТЬ КАТАЛОГ / ПРАЙС (PDF/XLS)</a>
-                    </div>
-                    """, unsafe_allow_html=True)
+            # Определяем, ввели домен или название
+            if "." in company_name and " " not in company_name:
+                base_url = company_name if company_name.startswith("http") else f"https://{company_name}"
             else:
-                st.warning("Автоматика не нашла прямых файлов. Попробуйте кнопки ниже.")
+                base_url = find_official_site(company_name)
+            
+            if base_url:
+                st.info(f"📍 Работаю с сайтом: {base_url}")
+                
+                # Сканируем сайт напрямую
+                found_links = scan_site_for_catalogs(base_url)
+                
+                if found_links:
+                    st.success(f"Найдено прямых ссылок: {len(found_links)}")
+                    for item in found_links:
+                        st.markdown(f"""
+                        <div class="catalog-card">
+                            <h4 style="margin-top:0;">📦 {item['title']}</h4>
+                            <a href="{item['link']}" target="_blank" class="btn-main">📥 ОТКРЫТЬ ФАЙЛ / РАЗДЕЛ</a>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.warning("На главной странице сайта прямых ссылок на файлы не найдено. Попробуйте поиск ниже.")
+            else:
+                st.error("Не удалось автоматически найти официальный сайт. Попробуйте ввести домен (например, lakond.ru)")
 
-        # Ручные ссылки
+        # Резервные кнопки (всегда работают)
         st.markdown("---")
-        c1, c2, c3 = st.columns(3)
+        st.write("### 🔍 Если не нашли на сайте, ищем в сети:")
+        c1, c2 = st.columns(2)
         with c1:
-            g_url = f"https://www.google.com/search?q={urllib.parse.quote(q + ' подарки каталог ' + str(target_year) + ' pdf')}"
-            st.link_button("Google (Каталоги)", g_url)
+            g_q = urllib.parse.quote(f'"{company_name}" новогодний каталог {year} filetype:pdf')
+            st.link_button("📂 Искать PDF в Google", f"https://www.google.com/search?q={g_q}")
         with c2:
-            y_url = f"https://yandex.ru/search/?text={urllib.parse.quote(q + ' новогодние подарки прайс ' + str(target_year) + ' xls')}"
-            st.link_button("Яндекс (Прайсы)", y_url)
-        with c3:
-            vk_url = f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={urllib.parse.quote(q + ' подарки ' + str(target_year))}"
-            st.link_button("ВКонтакте (Прайсы)", vk_url)
+            vk_q = urllib.parse.quote(f'"{company_name}" подарки прайс 2025')
+            st.link_button("📱 Искать прайс в VK", f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={vk_q}")
