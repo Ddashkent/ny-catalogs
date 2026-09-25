@@ -29,7 +29,6 @@ st.set_page_config(
 
 TARGET_YEAR = 2026
 
-# Красно-белый брендинг Первый Снег + Нежный редкий снег
 st.markdown(
     """
     <style>
@@ -97,19 +96,18 @@ st.markdown(
 
 st.title(f"📦 Полный Экстрактор Упаковки {TARGET_YEAR}")
 st.caption(
-    "Глубокий обход всех страниц каталога. Полный забор картинок коробок с автоматической кодировкой ссылок."
+    "Двухуровневый сканер продукции: находит новогодние разделы внутри меню 'Продукция' и выгружает 100% коробок."
 )
 
 # -----------------------------
-# КАРТА САЙТОВ И ПАГИНАЦИИ
+# БАЗА ЗНАНИЙ И ПРЯМЫЕ ПУТИ
 # -----------------------------
 
 SITE_MAP = {
+    "акконд": "akkond.ru",
     "рубин": "rubin-2000.ru",
-    "rubin": "rubin-2000.ru",
     "академия шоколада": "chocolate-academy.ru",
     "лаконд": "lakond.ru",
-    "акконд": "akkond.ru",
     "донко": "donko.su",
     "тор": "donko.su",
     "дилявер": "dilaver.ru",
@@ -123,9 +121,14 @@ SITE_MAP = {
     "конфешн": "confashion.ru",
     "тореро": "torero.ru",
     "славянка": "slavyanka.ru",
+    "униконф": "uniconf.ru",
+    "красный октябрь": "uniconf.ru",
+    "рот фронт": "uniconf.ru",
+    "бабаевский": "uniconf.ru",
 }
 
 DIRECT_START_URLS = {
+    "akkond.ru": "https://akkond.ru/catalog/novogodnie-podarki/",
     "rubin-2000.ru": "https://rubin-2000.ru/catalog/",
     "podarki-reid21.ru": "https://podarki-reid21.ru/present-category/novogodnie-podarki-2027/podarki-v-kartonnoj-upakovke-novogodnie-podarki-2027/",
     "chocolate-academy.ru": "https://chocolate-academy.ru/catalog/novogodnie-podarki/",
@@ -141,12 +144,18 @@ GOOD_DOC_WORDS = ["каталог", "прайс", "подарки", "2026", "202
 
 JUNK_IMAGE_WORDS = [
     "logo", "icon", "banner", "slider", "bg-", "social", "avatar", "payment", "delivery", "vk",
-    "акконд", "бабаевск", "ротфронт", "красный_октябрь", "essen", "эссен", "славянк", "конти", "kdv"
+    "бабаевск", "ротфронт", "красный_октябрь", "essen", "эссен", "конти", "kdv"
 ]
 
 TEXTILE_AND_TOY_JUNK = [
     "текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка", "мешок"
 ]
+
+# Ключевые слова первого уровня (где искать каталоги)
+PRODUCT_MENU_WORDS = ["продукц", "catalog", "katalog", "продукты", "ассортимент", "shop", "товары"]
+
+# Ключевые слова целевого сезона/новогоднего раздела
+NEW_YEAR_TARGET_WORDS = ["новогод", "подар", "нг", "newyear", "gift", "2026", "2025", "2027", "праздник"]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
@@ -164,10 +173,9 @@ def normalize_domain(value: str) -> str:
             return domain
     if "." in v and " " not in v:
         return v.replace("https://", "").replace("http://", "").split("/")[0]
-    return "rubin-2000.ru"
+    return "akkond.ru"
 
 def fix_and_encode_url(base_url: str, src: str) -> str:
-    """Исправляет и кодирует кириллические ссылки картинок"""
     src = src.strip()
     if src.startswith("//"):
         src = "https:" + src
@@ -185,14 +193,63 @@ def get_html(url: str):
         pass
     return None, None
 
+# --- ДВУХУРОВНЕВЫЙ ДИНАМИЧЕСКИЙ СКАКАТЕЛЬ ПО МЕНЮ ПРОДУКЦИИ ---
+
+def discover_new_year_categories(domain: str):
+    """
+    Сканирует 'Продукцию' и находит глубоко спрятанные разделы 'Новый год / Подарки'
+    """
+    base_url = f"https://{domain}"
+    
+    # Стартовые точки
+    start_urls = [base_url]
+    if domain in DIRECT_START_URLS:
+        start_urls.insert(0, DIRECT_START_URLS[domain])
+
+    target_category_urls = set(start_urls)
+
+    # 1. Заходим на главную и ищем разделы "Продукция" / "Каталог"
+    _, main_html = get_html(base_url)
+    if main_html:
+        soup_main = BeautifulSoup(main_html, "html.parser")
+        
+        # Находим ссылки уровня "Продукция"
+        product_menu_links = []
+        for a in soup_main.find_all("a", href=True):
+            href = a["href"].strip().lower()
+            text = a.get_text(" ", strip=True).lower()
+            full_link = fix_and_encode_url(base_url, a["href"])
+
+            if domain in full_link:
+                # Если в ссылке прямо сказано "Новый год" — берем сразу!
+                if any(ny in text or ny in href for ny in NEW_YEAR_TARGET_WORDS):
+                    target_category_urls.add(full_link)
+                # Если ссылка ведет в раздел "Продукция" — заносим для проверки 2-го уровня
+                elif any(pm in text or pm in href for cw in PRODUCT_MENU_WORDS for pm in [cw]):
+                    if full_link not in product_menu_links and len(product_menu_links) < 5:
+                        product_menu_links.append(full_link)
+
+        # 2. Переходим внутрь найденных разделов "Продукция" и ищем подразделы "Новый год"
+        for prod_link in product_menu_links:
+            _, prod_html = get_html(prod_link)
+            if prod_html:
+                soup_prod = BeautifulSoup(prod_html, "html.parser")
+                for a_sub in soup_prod.find_all("a", href=True):
+                    sub_href = a_sub["href"].strip().lower()
+                    sub_text = a_sub.get_text(" ", strip=True).lower()
+                    full_sub_link = fix_and_encode_url(prod_link, a_sub["href"])
+
+                    if domain in full_sub_link:
+                        if any(ny in sub_text or ny in sub_href for ny in NEW_YEAR_TARGET_WORDS):
+                            target_category_urls.add(full_sub_link)
+
+    return list(target_category_urls)
+
 # --- ШАГ 1: ПОИСК НАСТОЯЩИХ КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ) ---
 
 def scan_documents(domain: str):
     docs, seen = [], set()
-    base = f"https://{domain}"
-    urls = [base, f"{base}/catalog/"]
-    if domain in DIRECT_START_URLS:
-        urls.insert(0, DIRECT_START_URLS[domain])
+    urls = discover_new_year_categories(domain)
 
     for url in urls:
         _, html = get_html(url)
@@ -217,44 +274,36 @@ def scan_documents(domain: str):
                         docs.append({"title": a.get_text().strip() or "Официальный каталог 2026", "url": full_link})
     return docs
 
-# --- ШАГ 2: ОБХОД ВСЕХ СТРАНИЦ ПАГИНАЦИИ И ВЫГРУЗКА БАЙТОВ ---
+# --- ШАГ 2: СБОР ВСЕХ КАРТОЧЕК С ТАРГЕТНЫХ СТРАНИЦ ---
 
-def find_all_pagination_pages(domain: str, start_url: str):
-    """Ищет все страницы каталога (1, 2, 3, 4, 5...)"""
-    pages = [start_url]
-    seen = {start_url}
+def find_all_pagination_pages(domain: str, category_urls: list):
+    """Находит все страницы пагинации внутри новогодних категорий"""
+    all_pages = set(category_urls)
 
-    _, html = get_html(start_url)
-    if not html:
-        return pages
+    for cat_url in category_urls:
+        _, html = get_html(cat_url)
+        if not html:
+            continue
 
-    soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip()
+            text = a.get_text().strip()
+            full_url = fix_and_encode_url(cat_url, href)
 
-    # Ищем ссылки пагинации на странице
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        text = a.get_text().strip()
-        full_url = fix_and_encode_url(start_url, href)
+            if domain in full_url:
+                if any(p in href.lower() for p in ["pagen", "page", "p=", "pg="]) or text.isdigit():
+                    all_pages.add(full_url)
 
-        if domain in full_url:
-            # Признаки страниц пагинации Bitrix / Tilda / WordPress
-            if any(p in href.lower() for p in ["pagen", "page", "p=", "pg="]) or text.isdigit():
-                if full_url not in seen:
-                    seen.add(full_url)
-                    pages.append(full_url)
+        # Авто-генерация страниц для Bitrix (если не распознались явные кнопки)
+        if "akkond.ru" in domain or "rubin-2000.ru" in domain:
+            for p_num in range(2, 6):
+                all_pages.add(f"{cat_url}?PAGEN_1={p_num}")
 
-    # Если Битрикс-пагинация не нашла явных ссылок, генерируем автоматически до 8 страниц
-    if len(pages) == 1 and "rubin-2000.ru" in domain:
-        for p_num in range(2, 9):
-            p_url = f"{start_url}?PAGEN_1={p_num}"
-            if p_url not in seen:
-                seen.add(p_url)
-                pages.append(p_url)
-
-    return pages
+    return list(all_pages)
 
 def download_image_bytes(img_url: str):
-    """Качает байты картинки и проверяет, что это не баннер"""
+    """Качает картинку в высоком качестве и проверяет геометрию"""
     try:
         res = requests.get(img_url, headers=HEADERS, timeout=6, verify=False)
         if res.status_code == 200 and len(res.content) > 3000:
@@ -264,7 +313,6 @@ def download_image_bytes(img_url: str):
                 if w < 120 or h < 120:
                     return None
                 ratio = w / h
-                # Пропорции коробок: от 0.38 до 1.65 (баннеры отсекаются)
                 if ratio > 1.65 or ratio < 0.35:
                     return None
                 ext = (img.format or "JPEG").lower().replace("jpeg", "jpg")
@@ -276,15 +324,15 @@ def download_image_bytes(img_url: str):
     return None
 
 def scan_all_products_with_pagination(domain: str):
-    start_url = DIRECT_START_URLS.get(domain, f"https://{domain}/catalog/")
+    # 1. Находим целевые категории "Новый год" (включая путь через "Продукцию")
+    category_urls = discover_new_year_categories(domain)
     
-    # 1. Находим ВСЕ страницы пагинации
-    all_pages = find_all_pagination_pages(domain, start_url)
+    # 2. Раскрываем пагинацию
+    all_pages = find_all_pagination_pages(domain, category_urls)
     
     raw_items = []
     seen_imgs = set()
 
-    # 2. Парсим каждую страницу
     def parse_single_page(page_url):
         p_items = []
         _, html = get_html(page_url)
@@ -293,11 +341,10 @@ def scan_all_products_with_pagination(domain: str):
 
         soup = BeautifulSoup(html, "html.parser")
 
-        # Удаляем подвал, шапку и блоки партнеров
+        # Исключаем служебные подвалы и шапки
         for junk in soup.find_all(["footer", "header", "nav"], class_=re.compile(r"partner|brand|footer|header|slider", re.I)):
             junk.decompose()
 
-        # Ищем карточки
         cards = soup.find_all(
             lambda t: t.name in ["div", "li", "article", "section"]
             and t.get("class")
@@ -350,7 +397,7 @@ def scan_all_products_with_pagination(domain: str):
         for res in executor.map(parse_single_page, all_pages):
             raw_items.extend(res)
 
-    # 3. Скачиваем байты изображений в параллельном режиме (чтобы гарантировать отображение!)
+    # 3. Скачиваем байты изображений в высоком качестве
     validated = []
     def validate_and_download(p):
         info = download_image_bytes(p["img_url"])
@@ -371,7 +418,7 @@ def scan_all_products_with_pagination(domain: str):
 
 company_input = st.text_input(
     "Введите название компании или адрес её сайта:",
-    placeholder="Например: Рубин, РУБИН, Рэйд 21, Лаконд, Акконд, rubin-2000.ru...",
+    placeholder="Например: Акконд, Рубин, Рэйд 21, Лаконд, akkond.ru...",
 )
 
 if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary", use_container_width=True):
@@ -383,7 +430,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
     if domain:
         st.success(f"🌐 Официальный сайт подключен: `{domain}`")
 
-        # ШАГ 1: ПОИСК НАСТОЯЩИХ PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ)
+        # ШАГ 1: ПОИСК НАСТОЯЩИХ PDF КАТАЛОГОВ
         with st.spinner("ШАГ 1: Сканируем сайт на наличие PDF/Excel каталогов..."):
             documents = scan_documents(domain)
 
@@ -404,15 +451,14 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                     unsafe_allow_html=True,
                 )
         else:
-            # ШАГ 2: ПОЛНЫЙ СБОР ВСЕХ КАРТОЧЕК СО ВСЕХ СТРАНИЦ ПАГИНАЦИИ
-            with st.spinner("ШАГ 2: Прямых PDF нет. Сканируем ВСЕ страницы каталога и загружаем изображения..."):
+            # ШАГ 2: АВТО-ОБНАРУЖЕНИЕ РАЗДЕЛОВ "НОВЫЙ ГОД" ВНУТРИ "ПРОДУКЦИИ" И СБОР КАРТОЧЕК
+            with st.spinner("ШАГ 2: Анализируем меню 'Продукция', находим новогодний раздел и выгружаем коробки..."):
                 products = scan_all_products_with_pagination(domain)
 
             st.markdown("---")
             if products:
-                st.success(f"Успешно найдено карточек упаковки и подарков на всех страницах: **{len(products)} шт.**")
+                st.success(f"Успешно обработано карточек новогодней упаковки и подарков: **{len(products)} шт.**")
 
-                # Формирование ZIP архива
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                     for i, prod in enumerate(products, start=1):
@@ -428,7 +474,6 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
 
                 st.markdown("---")
 
-                # Отображение через скачанные байты (ГАРАНТИРУЕТ ОТОБРАЖЕНИЕ КАРТИНОК!)
                 cols = st.columns(4)
                 for idx, prod in enumerate(products):
                     with cols[idx % 4]:
@@ -446,7 +491,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
             else:
                 st.error("На сайте не удалось выгрузить карточки товаров.")
     else:
-        st.error("Не удалось определить сайт. Введите адрес напрямую (например, rubin-2000.ru)")
+        st.error("Не удалось определить сайт. Введите адрес напрямую (например, akkond.ru)")
 
 st.divider()
-st.caption(f"Инструмент «Первый Снег». Сезон {TARGET_YEAR}. Полный сбор данных со всех страниц каталога.")
+st.caption(f"Инструмент «Первый Снег». Сезон {TARGET_YEAR}. Двухуровневое сканирование разделов 'Продукция'.")
