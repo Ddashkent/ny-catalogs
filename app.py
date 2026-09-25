@@ -22,7 +22,7 @@ except ImportError:
 # -----------------------------
 
 st.set_page_config(
-    page_title="Первый Снег | Экстрактор Упаковки 2026",
+    page_title="Первый Снег | Полный Экстрактор Упаковки 2026",
     page_icon="❄️",
     layout="wide",
 )
@@ -96,13 +96,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title(f"📦 Анализ Новогодней Упаковки {TARGET_YEAR}")
+st.title(f"📦 Полный Экстрактор Упаковки {TARGET_YEAR}")
 st.caption(
-    "Приоритетный поиск официальных PDF/Excel каталогов. Точный снайперский переход в новогодние разделы каталогов."
+    "Приоритетный поиск official PDF/Excel прайсов. Авто-раскрытие кнопок 'Показать еще' для сбора 100% скрытых коробок."
 )
 
 # -----------------------------
-# БАЗА ЗНАНИЙ И ТОЧНЫЕ ССЫЛКИ КАТЕГОРИЙ
+# БАЗА ЗНАНИЙ И ТОЧНЫЕ АДРЕСА
 # -----------------------------
 
 SITE_MAP = {
@@ -126,7 +126,6 @@ SITE_MAP = {
     "славянка": "slavyanka.ru",
 }
 
-# Прямые ссылки на разделы Нового Года на сайтах
 DIRECT_GIFT_URLS = {
     "akkond.ru": [
         "https://akkond.ru/catalog/novyy_god/",
@@ -147,22 +146,21 @@ DIRECT_GIFT_URLS = {
     "lakond.ru": ["https://lakond.ru/products/"],
 }
 
-# 1. ЗАБЛОКИРОВАННЫЕ РАЗДЕЛЫ (НОВОСТИ, БЛОГИ, О НАС)
+# 1. ЗАБЛОКИРОВАННЫЕ НОВОСТИ И ЮР. МУСОР
 FORBIDDEN_URL_PATHS = [
     "/news", "/novosti", "/press", "/sobytiya", "/media", "/blog", 
     "/about", "/company", "/o-nas", "/history", "/stati", "/article"
 ]
 
-# 2. ЗАБЛОКИРОВАННЫЕ СЛОВА (Презентации, Соглашения, Новости)
 FORBIDDEN_TITLES = [
     "презентация", "соглашение", "политика", "конфиденциальности", "договор", 
     "оферта", "вакансии", "реквизиты", "cookies", "кубок", "чувашии", 
     "коллектив", "выставка", "награда", "диплом", "акция", "конкурс", "новости"
 ]
 
-# 3. ФИЛЬТР ШТУЧНЫХ КОНФЕТ И ТЕКСТИЛЯ
+# 2. ФИЛЬТР ТЕКСТИЛЯ И МЕЛКИХ ОДИНОЧНЫХ СЛАДОСТЕЙ
 TEXTILE_AND_TOY_JUNK = [
-    "текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка", "мешок"
+    "текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка"
 ]
 
 JUNK_IMAGE_WORDS = [
@@ -207,25 +205,7 @@ def get_html(url: str):
         pass
     return None, None
 
-def find_domain_dynamic(company_name: str) -> str:
-    q_low = company_name.lower().strip()
-    dom = normalize_domain(q_low)
-    if dom:
-        return dom
-    try:
-        from duckduckgo_search import DDGS
-        query = f'"{company_name}" новогодняя упаковка подарки официальный сайт'
-        with DDGS() as ddgs:
-            res = list(ddgs.text(query, region="ru-ru", max_results=4))
-            for r in res:
-                link = r.get("href", "")
-                if link and not any(bad in link for bad in ["wikipedia", "vk.com", "youtube", "checko"]):
-                    return normalize_domain(link)
-    except Exception:
-        pass
-    return None
-
-# --- ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ) ---
+# --- ШАГ 1: ПОИСК PDF / EXCEL КАТАЛОГОВ ---
 
 def scan_documents(domain: str):
     docs, seen = [], set()
@@ -244,20 +224,50 @@ def scan_documents(domain: str):
 
             if any(ext in href for ext in [".pdf", ".xlsx", ".xls"]):
                 combined = f"{text} {href}"
-                # 1. ЗАБЛОКИРОВАТЬ ПРЕЗЕНТАЦИИ И СОГЛАШЕНИЯ
                 if any(bad in combined for bad in FORBIDDEN_TITLES):
                     continue
-                # 2. ТРЕБОВАТЬ СЛОВА КАТАЛОГ ИЛИ ПРАЙС
                 if any(good in combined for good in ["каталог", "прайс", "подарки", "2026", "2025", "catalog", "price"]):
                     if full_link not in seen:
                         seen.add(full_link)
                         docs.append({"title": a.get_text().strip() or "Официальный каталог 2026", "url": full_link})
     return docs
 
-# --- ШАГ 2: ВЫГРУЗКА ТОЛЬКО ПОДАРКОВ И КОРОБОК ---
+# --- ШАГ 2: РАСКРЫТИЕ КНОПКИ "ПОКАЗАТЬ ЕЩЕ" И СБОР ВСЕХ КОРOБОК ---
+
+def expand_show_more_pages(domain: str, start_urls: list):
+    """
+    Находит кнопки 'Показать еще' и заставляет сервер отдать скрытые страницы товара!
+    """
+    expanded_urls = set(start_urls)
+
+    for start_url in start_urls:
+        _, html = get_html(start_url)
+        if not html:
+            continue
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        # 1. Поиск ссылок в кнопке "Показать еще" / "Загрузить еще" / "Load More"
+        for a in soup.find_all("a", href=True):
+            text = a.get_text(" ", strip=True).lower()
+            href = a["href"].strip()
+            
+            if any(btn_text in text for btn in ["показать еще", "загрузить еще", "показать ещё", "показать больше", "показать все", "show all"]):
+                full_btn_link = fix_and_encode_url(start_url, href)
+                expanded_urls.add(full_btn_link)
+
+        # 2. Авто-генерация параметров пагинации (1..10 страниц)
+        # Для Битрикса (Акконд, Рубин) параметр PAGEN_1 и SHOWALL_1 раскрывает весь список!
+        clean_base = start_url.split("?")[0]
+        expanded_urls.add(f"{clean_base}?SHOWALL_1=1") # Показать всё сразу
+        for p_num in range(2, 9):
+            expanded_urls.add(f"{clean_base}?PAGEN_1={p_num}")
+            expanded_urls.add(f"{clean_base}?page={p_num}")
+
+    return list(expanded_urls)
 
 def download_product_image(img_url: str):
-    """Качает фото подарка и проверяет геометрию (без баннеров)"""
+    """Загружает фото подарка и проверяет геометрию (без баннеров)"""
     try:
         img_url = re.sub(r"/resize_cache/.*?/\d+_\d+_\d+/", "/upload/", img_url)
         img_url = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", img_url)
@@ -268,12 +278,11 @@ def download_product_image(img_url: str):
                 img = Image.open(io.BytesIO(res.content))
                 w, h = img.size
 
-                # Отсекаем мелкие логотипы и системные картинки
                 if w < 130 or h < 130:
                     return None
 
                 ratio = w / h
-                # Подарочные коробки: пропорции от 0.38 до 1.6 (все баннеры отсекаются)
+                # Подарочные коробки: пропорции от 0.38 до 1.6
                 if ratio > 1.65 or ratio < 0.35:
                     return None
 
@@ -285,9 +294,11 @@ def download_product_image(img_url: str):
         pass
     return None
 
-def scan_product_boxes(domain: str):
-    # Берем точные целевые адреса Нового года
-    urls = DIRECT_GIFT_URLS.get(domain, [f"https://{domain}/catalog/novyy_god/", f"https://{domain}/catalog/novogodnie-podarki/", f"https://{domain}/catalog/"])
+def scan_all_boxes_with_show_more(domain: str):
+    base_urls = DIRECT_GIFT_URLS.get(domain, [f"https://{domain}/catalog/novyy_god/", f"https://{domain}/catalog/"])
+
+    # Раскрываем все скрытые порции товаров кнопки "Показать еще"
+    urls = expand_show_more_pages(domain, base_urls)
 
     raw_items = []
     seen_imgs = set()
@@ -299,7 +310,7 @@ def scan_product_boxes(domain: str):
 
         soup = BeautifulSoup(html, "html.parser")
 
-        # Удаляем из поиска новости, статьи, шапку и подвал
+        # Удаляем служебные блоки
         for junk in soup.find_all(["footer", "header", "nav", "aside"], class_=re.compile(r"news|blog|article|partner|brand|footer|header|slider", re.I)):
             junk.decompose()
 
@@ -337,12 +348,7 @@ def scan_product_boxes(domain: str):
             text = card.get_text(" ", strip=True) if card.name != "img" else ""
             combined_text = (text + " " + (img.get("alt") or "")).lower()
 
-            # 1. ОТСЕКАЕМ НОВОСТИ И СТАТЬИ ПО НАЗВАНИЮ
-            if any(bad in combined_text for bad in FORBIDDEN_TITLES):
-                continue
-
-            # 2. ОТСЕКАЕМ ТЕКСТИЛЬ И МЯГКИЕ ИГРУШКИ
-            if any(bad in combined_text for bad in TEXTILE_AND_TOY_JUNK):
+            if any(bad in combined_text for bad in FORBIDDEN_TITLES + TEXTILE_AND_TOY_JUNK):
                 continue
 
             weight_match = WEIGHT_REGEX.search(text)
@@ -365,8 +371,8 @@ def scan_product_boxes(domain: str):
             return p
         return None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        validated = [r for r in executor.map(validate, raw_items[:80]) if r]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        validated = [r for r in executor.map(validate, raw_items) if r is not None]
 
     return validated
 
@@ -388,7 +394,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
     if domain:
         st.success(f"🌐 Официальный раздел подключен: `{domain}`")
 
-        # ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ)
+        # ШАГ 1: ПОИСК PDF КАТАЛОГОВ
         with st.spinner("ШАГ 1: Проверяем наличие PDF/Excel каталогов..."):
             documents = scan_documents(domain)
 
@@ -409,13 +415,13 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                     unsafe_allow_html=True,
                 )
         else:
-            # ШАГ 2: ИЗВЛЕЧЕНИЕ ТОЛЬКО НОВОГОДНИХ ПОДАРКОВ
-            with st.spinner("ШАГ 2: Извлекаем фотографии подарков и коробок из раздела Новый Год..."):
-                products = scan_product_boxes(domain)
+            # ШАГ 2: ИЗВЛЕЧЕНИЕ ВСЕХ КОРOБОК (С РАСКРЫТИЕМ КНОПОК "ПОКАЗАТЬ ЕЩЕ")
+            with st.spinner("ШАГ 2: Раскрываем кнопки 'Показать еще' и собираем ВСЕ карточки подарков с сайта..."):
+                products = scan_all_boxes_with_show_more(domain)
 
             st.markdown("---")
             if products:
-                st.success(f"Найдено новогодних подарков и коробок: **{len(products)} шт.**")
+                st.success(f"Успешно извлечено карточек подарков со всех скрытых порций: **{len(products)} шт.**")
 
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -426,7 +432,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                 st.download_button(
                     f"📦 СКАЧАТЬ ВСЕ {len(products)} ПОДАРКОВ В ZIP-АРХИВЕ",
                     data=zip_buffer.getvalue(),
-                    file_name=f"{domain}_gifts_catalog.zip",
+                    file_name=f"{domain}_all_gifts_catalog.zip",
                     mime="application/zip",
                 )
 
@@ -451,4 +457,4 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
         st.error("Не удалось определить сайт. Введите адрес напрямую (например, akkond.ru)")
 
 st.divider()
-st.caption(f"Инструмент компании «Первый Снег». Сезон {TARGET_YEAR}.")
+st.caption(f"Инструмент компании «Первый Снег». Сезон {TARGET_YEAR}. Раскрытие AJAX-кнопок 'Показать еще'.")
