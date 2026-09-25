@@ -19,19 +19,19 @@ except ImportError:
 # -----------------------------
 
 st.set_page_config(
-    page_title="Первый Снег | Картонная Упаковка 2026",
+    page_title="Первый Снег | Каталоги Картонной Упаковки",
     page_icon="📦",
     layout="wide",
 )
 
 TARGET_YEAR = 2026
 
+# БРЕНДИНГ "ПЕРВЫЙ СНЕГ" И МЯГКИЙ СНЕГ
 st.markdown(
     """
     <style>
     .stApp { background-color: #f8fafc; }
     
-    /* Брендовый логотип Первый Снег */
     .company-logo {
         position: fixed; top: 15px; right: 20px; z-index: 99999;
         background-color: #dc2626; color: #ffffff !important;
@@ -41,7 +41,6 @@ st.markdown(
         letter-spacing: 1px;
     }
     
-    /* Нежный редкий снег */
     @keyframes snowfall {
         0% { transform: translateY(-10px) translateX(0); opacity: 0; }
         20% { opacity: 0.4; }
@@ -95,11 +94,27 @@ st.markdown(
 
 st.title(f"📦 Анализ Картонной Упаковки {TARGET_YEAR}")
 st.caption(
-    "Сбор упаковки из картона, МГК, микрогофрокартона и тубусов. Текстиль, мягкие игрушки и служебный мусор отсекаются."
+    "Приоритетный поиск официального PDF/Excel. Если файла нет — точный сбор карточек картонной упаковки (МГК, переплетный, хром-эрзац, тубусы)."
 )
 
 # -----------------------------
-# ФИЛЬТРЫ И МАРКЕРЫ МАТЕРИАЛОВ
+# КАРТА ПРЯМЫХ ПУТЕЙ СAЙТОВ (SITE ROUTE REGISTRY)
+# -----------------------------
+
+EXACT_SITE_ROUTES = {
+    "podarki-reid21.ru": [
+        "/product-category/podarki-v-kartonnoj-upakovke/",
+        "/product-category/podarochnye-nabory/",
+    ],
+    "chocolate-academy.ru": ["/catalog/", "/catalog/novogodnie-podarki/"],
+    "rubin-2000.ru": ["/catalog/"],
+    "lakond.ru": ["/products/", "/catalog/"],
+    "akkond.ru": ["/catalog/novogodnie-podarki/"],
+    "donko.su": ["/catalog/"],
+}
+
+# -----------------------------
+# ФИЛЬТРЫ И МАРКЕРЫ ИСКЛЮЧЕНИЙ
 # -----------------------------
 
 REQUIRED_DOC_WORDS = [
@@ -114,6 +129,7 @@ REQUIRED_DOC_WORDS = [
     "catalog",
     "price",
 ]
+
 JUNK_DOC_WORDS = [
     "политика",
     "согласие",
@@ -126,9 +142,11 @@ JUNK_DOC_WORDS = [
     "оферта",
     "инвесторам",
     "cookies",
+    "оплата",
+    "доставка",
 ]
 
-# ИСКЛЮЧАЕМ ТЕКСТИЛЬ, МЯГКУЮ УПАКОВКУ И ИГРУШКИ!
+# ИСКЛЮЧАЕМ ТЕКСТИЛЬ, МЯГКИЕ ИГРУШКИ, СЛУЖЕБНЫЕ КАРТИНКИ
 TEXTILE_AND_TOY_JUNK = [
     "текстиль",
     "мягкая",
@@ -143,8 +161,8 @@ TEXTILE_AND_TOY_JUNK = [
     "рюкзак",
     "подушка",
     "мешок",
-    "символ года",
-    "символом года",
+    "оплата",
+    "доставка",
     "печенье",
     "батончик",
     "мармелад",
@@ -158,18 +176,18 @@ TEXTILE_AND_TOY_JUNK = [
     "icon",
 ]
 
-# СТРАНИЦЫ И КАТЕГОРИИ, КОТОРЫЕ НАМ НУЖНЫ (КАРТОН / УПАКОВКА)
 CARDBOARD_CATEGORY_WORDS = [
+    "kartonnaya",
     "karton",
     "upakovka",
-    "kartonnaya",
     "tubus",
     "box",
     "catalog",
     "podarki",
     "katalog",
+    "product-category",
 ]
-# КАТЕГОРИИ, КОТОРЫЕ ПРОПУСКАЕМ
+
 SKIP_CATEGORY_WORDS = [
     "tekstil",
     "myagkaya",
@@ -178,6 +196,8 @@ SKIP_CATEGORY_WORDS = [
     "dostavka",
     "news",
     "kontakty",
+    "payment",
+    "shipping",
 ]
 
 HEADERS = {
@@ -188,7 +208,7 @@ WEIGHT_REGEX = re.compile(
 )
 
 # -----------------------------
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ВСПАМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # -----------------------------
 
 
@@ -257,6 +277,9 @@ def scan_for_documents(domain: str):
         return docs
 
     scan_urls = [final_url]
+    if domain in EXACT_SITE_ROUTES:
+        scan_urls.extend([base_url + p for p in EXACT_SITE_ROUTES[domain]])
+
     soup = BeautifulSoup(html, "html.parser")
     for a in soup.find_all("a", href=True):
         full = urllib.parse.urljoin(final_url, a["href"])
@@ -300,7 +323,7 @@ def scan_for_documents(domain: str):
     return docs
 
 
-# --- ШАГ 2: ГЛУБОКИЙ СБОР УПАКОВКИ ИЗ КАРТОНА / МГК ---
+# --- ШАГ 2: ГЛУБОКИЙ СБОР КАРТОННОЙ УПАКОВКИ ---
 
 
 def download_product_image(img_url: str):
@@ -318,7 +341,7 @@ def download_product_image(img_url: str):
                     return None
 
                 ratio = w / h
-                # Картонные коробки, тубусы, книги: ratio от 0.4 до 1.55
+                # Картонные коробки, тубусы, книги: ratio от 0.38 до 1.55
                 if ratio > 1.55 or ratio < 0.38:
                     return None
 
@@ -333,32 +356,31 @@ def download_product_image(img_url: str):
 
 def scan_cardboard_products(domain: str):
     base_url = f"https://{domain}"
+
+    # Определяем точные целевые страницы категорий
+    category_pages = [base_url]
+    if domain in EXACT_SITE_ROUTES:
+        category_pages.extend([base_url + p for p in EXACT_SITE_ROUTES[domain]])
+
     final_url, html = get_html(base_url)
-    if not html:
-        return []
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a["href"].strip().lower()
+            text = a.get_text(" ", strip=True).lower()
+            full = urllib.parse.urljoin(final_url, a["href"])
 
-    soup = BeautifulSoup(html, "html.parser")
-    category_pages = [final_url]
-
-    # 1. ОБХОД КАТЕГОРИЙ: Ищем страницы с картоном и пропускаем текстиль/игрушки
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip().lower()
-        text = a.get_text(" ", strip=True).lower()
-        full = urllib.parse.urljoin(final_url, a["href"])
-
-        if domain in full:
-            # БЛОКИРУЕМ РАЗДЕЛЫ ТЕКСТИЛЯ И ИГРУШЕК!
-            if any(bad in href or bad in text for bad in SKIP_CATEGORY_WORDS):
-                continue
-            # БЕРЕМ ТОЛЬКО ПОДАРКИ, КАРТОН, УПАКОВКУ
-            if any(
-                good in href or good in text
-                for good in CARDBOARD_CATEGORY_WORDS
-            ):
-                if full not in category_pages:
-                    category_pages.append(full)
-        if len(category_pages) >= 15:
-            break
+            if domain in full:
+                if any(bad in href or bad in text for bad in SKIP_CATEGORY_WORDS):
+                    continue
+                if any(
+                    good in href or good in text
+                    for good in CARDBOARD_CATEGORY_WORDS
+                ):
+                    if full not in category_pages:
+                        category_pages.append(full)
+            if len(category_pages) >= 15:
+                break
 
     raw_products = []
 
@@ -369,6 +391,7 @@ def scan_cardboard_products(domain: str):
         p_soup = BeautifulSoup(p_html, "html.parser")
         prods = []
 
+        # Поиск контейнеров товаров (WooCommerce, Bitrix, Tilda и др.)
         containers = p_soup.find_all(
             lambda t: t.name in ["div", "li", "article", "section"]
             and t.get("class")
@@ -381,6 +404,7 @@ def scan_cardboard_products(domain: str):
                     "item",
                     "goods",
                     "element",
+                    "entry",
                 ]
             )
         )
@@ -400,14 +424,23 @@ def scan_cardboard_products(domain: str):
             )
             if not src or any(
                 bad in src.lower()
-                for bad in ["logo", "icon", "banner", "bg-", "social", "avatar"]
+                for bad in [
+                    "logo",
+                    "icon",
+                    "banner",
+                    "bg-",
+                    "social",
+                    "avatar",
+                    "delivery",
+                    "payment",
+                ]
             ):
                 continue
 
             full_img = urllib.parse.urljoin(p_url, src)
             text = card.get_text(" ", strip=True) if card.name != "img" else ""
 
-            # ФИЛЬТРАЦИЯ ТЕКСТИЛЯ И МЯГКИХ ИГРУШЕК ПО НАЗВАНИЮ И ОПИСАНИЮ
+            # БЛОКИРОВКА ТЕКСТИЛЯ И МЯГКИХ ИГРУШЕК
             combined_text = (text + " " + (img.get("alt") or "")).lower()
             if any(bad in combined_text for bad in TEXTILE_AND_TOY_JUNK):
                 continue
@@ -451,7 +484,7 @@ def scan_cardboard_products(domain: str):
 
 
 # -----------------------------
-# ИНТЕРФЕЙС
+# ИНТЕРФЕЙС STREAMLIT
 # -----------------------------
 
 company_input = st.text_input(
@@ -498,14 +531,14 @@ if st.button(
                 )
         else:
             with st.spinner(
-                "ШАГ 2: Фильтруем текстиль и игрушки, собираем картонную упаковку (МГК, тубусы, коробки)..."
+                "ШАГ 2: Собираем картонную упаковку (МГК, тубусы, коробки) без текстиля и служебных картинок..."
             ):
                 products = scan_cardboard_products(domain)
 
             st.markdown("---")
             if products:
                 st.success(
-                    f"Найдено картонной упаковки и коробок: **{len(products)} шт.** (Мягкие игрушки и текстиль отфильтрованы)"
+                    f"Найдено картонной упаковки и коробок: **{len(products)} шт.** (Мягкая упаковка и служебный мусор отфильтрованы)"
                 )
 
                 zip_buffer = io.BytesIO()
@@ -548,5 +581,5 @@ if st.button(
 
 st.divider()
 st.caption(
-    f"Инструмент компании «Первый Снег». Сезон {TARGET_YEAR}. Текстильная упаковка, мягкие игрушки и служебный мусор полностью отфильтрованы."
+    f"Инструмент компании «Первый Снег». Сезон {TARGET_YEAR}. Вся текстильная упаковка, игрушки, оплата и доставка отсечены."
 )
