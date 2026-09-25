@@ -3,18 +3,30 @@ import io
 import re
 import urllib.parse
 import zipfile
-from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
-from PIL import Image
 import requests
 import streamlit as st
+from bs4 import BeautifulSoup
+
+# Безопасный импорт Pillow
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+# Безопасный импорт DuckDuckGo
+try:
+    from duckduckgo_search import DDGS
+    HAS_DDGS = True
+except ImportError:
+    HAS_DDGS = False
 
 # -----------------------------
 # НАСТРОЙКИ ПРИЛОЖЕНИЯ
 # -----------------------------
 
 st.set_page_config(
-    page_title="Умный Экстрактор Каталогов 2026",
+    page_title="Умный Навигатор Каталогов 2026",
     page_icon="🎁",
     layout="wide",
 )
@@ -49,7 +61,7 @@ st.markdown(
         border: 1px solid #e2e8f0;
         border-radius: 12px;
         padding: 12px;
-        margin-bottom: 20px;
+        margin-bottom: 15px;
         text-align: center;
         box-shadow: 0 4px 10px rgba(0,0,0,0.03);
     }
@@ -77,11 +89,11 @@ st.markdown(
 
 st.title(f"🎁 Навигатор Каталогов & Прайсов {TARGET_YEAR}")
 st.caption(
-    "Приоритетный поиск официальных файлов (PDF/Excel). Если файл найден — парсинг картинок отменяется."
+    "Приоритетный поиск официальных PDF/Excel файлов. Поиск картинок включается только если файла нет."
 )
 
 # -----------------------------
-# БАЗА ЗНАНИЙ СAЙТОВ
+# БАЗА ЗНАНИЙ ФАБРИК
 # -----------------------------
 
 KNOWLEDGE_BASE = {
@@ -113,6 +125,7 @@ KNOWLEDGE_BASE = {
     "фортуна": "fortuna-podarki.ru",
     "победа": "pobeda.market",
     "славянка": "slavyanka.ru",
+    "красный мозырянин": "mozyrconfectionery.by",
 }
 
 JUNK_WORDS = [
@@ -153,6 +166,7 @@ WEIGHT_REGEX = re.compile(
 
 
 def normalize_domain(value: str) -> str:
+    value = value.strip()
     if not value.startswith("http"):
         value = "https://" + value
     parsed = urllib.parse.urlparse(value)
@@ -164,7 +178,7 @@ def get_html(url: str):
         res = requests.get(url, headers=HEADERS, timeout=6)
         if res.status_code == 200:
             return res.url, res.text
-    except:
+    except Exception:
         pass
     return None, None
 
@@ -176,24 +190,32 @@ def find_official_site(company_name: str):
     for k, v in KNOWLEDGE_BASE.items():
         if k in q_low or q_low in k:
             return v
-    try:
-        with DDGS() as ddgs:
-            res = list(
-                ddgs.text(
-                    f'"{company_name}" кондитерская фабрика подарки официальный сайт',
-                    region="ru-ru",
-                    max_results=4,
+
+    if HAS_DDGS:
+        try:
+            with DDGS() as ddgs:
+                res = list(
+                    ddgs.text(
+                        f'"{company_name}" кондитерская фабрика подарки официальный сайт',
+                        region="ru-ru",
+                        max_results=4,
+                    )
                 )
-            )
-            for r in res:
-                link = r.get("href", "")
-                if link and not any(
-                    bad in link
-                    for bad in ["wikipedia", "checko", "list-org", "otzovik"]
-                ):
-                    return normalize_domain(link)
-    except:
-        pass
+                for r in res:
+                    link = r.get("href", "")
+                    if link and not any(
+                        bad in link
+                        for bad in [
+                            "wikipedia",
+                            "checko",
+                            "list-org",
+                            "otzovik",
+                            "vk.com",
+                        ]
+                    ):
+                        return normalize_domain(link)
+        except Exception:
+            pass
     return None
 
 
@@ -202,26 +224,29 @@ def find_official_site(company_name: str):
 # -----------------------------
 
 
-def scan_for_documents_only(domain: str, company_name: str):
+def scan_for_documents_only(domain: str):
     """Быстрый поиск готовых файлов каталогов и прайсов"""
     docs = []
     seen = set()
 
-    # 1. Сканируем главную страницу и меню
     base_url = f"https://{domain}"
     final_url, html = get_html(base_url)
     if not html:
         base_url = f"http://{domain}"
         final_url, html = get_html(base_url)
 
+    # Сканируем ссылки на главной и в разделах
+    scan_urls = [final_url] if final_url else []
+
     if html:
         soup = BeautifulSoup(html, "html.parser")
         for a in soup.find_all("a", href=True):
-            href = a["href"].lower()
+            href = a["href"].strip()
             text = a.get_text().strip()
-            full_url = urllib.parse.urljoin(final_url, a["href"])
+            full_url = urllib.parse.urljoin(final_url, href)
 
-            if any(ext in href for ext in [".pdf", ".xlsx", ".xls", ".doc"]):
+            # Собираем прямые документы
+            if any(ext in href.lower() for ext in [".pdf", ".xlsx", ".xls", ".doc"]):
                 if not any(bad in text.lower() for bad in JUNK_WORDS):
                     if full_url not in seen:
                         seen.add(full_url)
@@ -232,37 +257,46 @@ def scan_for_documents_only(domain: str, company_name: str):
                             }
                         )
 
-    # 2. Если на главной не нашли, ищем файлы прямым запросом через поисковик
-    if not docs:
-        try:
-            with DDGS() as ddgs:
-                q = f'site:{domain} (каталог OR прайс) (новогодние подарки OR {TARGET_YEAR}) filetype:pdf OR filetype:xlsx'
-                res = list(ddgs.text(q, max_results=6))
-                for r in res:
-                    link = r.get("href", "")
-                    if link and link not in seen:
-                        seen.add(link)
-                        docs.append(
-                            {
-                                "title": r.get("title", "Официальный каталог (PDF)"),
-                                "link": link,
-                            }
-                        )
-        except:
-            pass
+            # Собираем ссылки на страницы каталогов для глубокой проверки
+            elif domain in full_url and any(
+                cw in text.lower() or cw in href.lower() for cw in CATALOG_WORDS
+            ):
+                if full_url not in scan_urls and len(scan_urls) < 6:
+                    scan_urls.append(full_url)
+
+    # Проверяем найденные страницы каталогов на наличие PDF/Excel
+    for page in scan_urls[1:]:
+        p_url, p_html = get_html(page)
+        if p_html:
+            p_soup = BeautifulSoup(p_html, "html.parser")
+            for a in p_soup.find_all("a", href=True):
+                href = a["href"].strip()
+                text = a.get_text().strip()
+                full_url = urllib.parse.urljoin(p_url, href)
+
+                if any(
+                    ext in href.lower() for ext in [".pdf", ".xlsx", ".xls", ".doc"]
+                ):
+                    if not any(bad in text.lower() for bad in JUNK_WORDS):
+                        if full_url not in seen:
+                            seen.add(full_url)
+                            docs.append(
+                                {
+                                    "title": text or "Скачать каталог / прайс-лист",
+                                    "link": full_url,
+                                }
+                            )
 
     return docs
 
 
 # -----------------------------
-# ШАГ 2: ШТАНОЙ ПАРСИНГ КАРТОЧЕК (ЕСЛИ НЕТ ФАЙЛОВ)
+# ШАГ 2: СБОР КАРТОЧЕК С САЙТА (ЕСЛИ НЕТ ФАЙЛОВ)
 # -----------------------------
 
 
 def get_high_res_url(img_url: str) -> str:
-    img_url = re.sub(
-        r"/resize_cache/.*?/\d+_\d+_\d+/", "/upload/", img_url
-    )
+    img_url = re.sub(r"/resize_cache/.*?/\d+_\d+_\d+/", "/upload/", img_url)
     img_url = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", img_url)
     return img_url
 
@@ -271,22 +305,25 @@ def download_product_image(img_url: str):
     try:
         img_url = get_high_res_url(img_url)
         res = requests.get(img_url, headers=HEADERS, timeout=5)
-        if res.status_code == 200 and "image" in res.headers.get(
-            "Content-Type", ""
-        ):
+        if res.status_code == 200 and "image" in res.headers.get("Content-Type", ""):
             data = res.content
-            if len(data) < 7000:
+            if len(data) < 6000:
                 return None
-            img = Image.open(io.BytesIO(data))
-            w, h = img.size
-            if w < 200 or h < 220:
-                return None
-            ratio = w / h
-            if ratio > 2.8 or ratio < 0.35:
-                return None
-            ext = (img.format or "JPEG").lower().replace("jpeg", "jpg")
+
+            if HAS_PIL:
+                img = Image.open(io.BytesIO(data))
+                w, h = img.size
+                if w < 180 or h < 180:
+                    return None
+                ratio = w / h
+                if ratio > 3.2 or ratio < 0.3:
+                    return None
+                ext = (img.format or "JPEG").lower().replace("jpeg", "jpg")
+            else:
+                ext = "jpg"
+
             return {"bytes": data, "ext": ext}
-    except:
+    except Exception:
         pass
     return None
 
@@ -337,9 +374,7 @@ def parse_page_for_products(page_url):
         )
         title = re.sub(r"\s+", " ", title).strip()
 
-        if len(title) > 3 and not any(
-            bad in title.lower() for bad in JUNK_WORDS
-        ):
+        if len(title) > 3 and not any(bad in title.lower() for bad in JUNK_WORDS):
             products.append(
                 {
                     "title": title,
@@ -352,7 +387,6 @@ def parse_page_for_products(page_url):
 
 
 def scan_products_fallback(domain):
-    """Сбор карточек товаров, если готовых файлов нет"""
     base_url = f"https://{domain}"
     final_url, html = get_html(base_url)
     if not html:
@@ -367,24 +401,21 @@ def scan_products_fallback(domain):
         if domain in full and any(cw in text or cw in href for cw in CATALOG_WORDS):
             if full not in pages:
                 pages.append(full)
-        if len(pages) >= 8:
+        if len(pages) >= 6:
             break
 
     raw_products = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         results = executor.map(parse_page_for_products, pages)
         for res in results:
             raw_products.extend(res)
 
-    # Дедупликация и загрузка фото
     unique_prods = []
     seen = set()
     for p in raw_products:
         if p["img_url"] not in seen:
             seen.add(p["img_url"])
             unique_prods.append(p)
-
-    validated = []
 
     def fetch_img(p):
         img_info = download_product_image(p["img_url"])
@@ -394,8 +425,9 @@ def scan_products_fallback(domain):
             return p
         return None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        res = executor.map(fetch_img, unique_prods[:32])
+    validated = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        res = executor.map(fetch_img, unique_prods[:28])
         validated = [r for r in res if r is not None]
 
     return validated
@@ -422,8 +454,7 @@ if mode == "🔍 По названию компании":
         if "." in company_input and " " not in company_input:
             domain = normalize_domain(company_input)
         else:
-            with st.spinner("Определяю сайт фабрики..."):
-                domain = find_official_site(company_input.strip())
+            domain = find_official_site(company_input.strip())
 else:
     site_input = st.text_input(
         "Введите домен напрямую:", placeholder="Например: rubin-2000.ru, lakond.ru"
@@ -433,25 +464,32 @@ else:
 
 if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primary"):
     if not domain:
-        st.error("Не удалось определить сайт. Уточните название или введите домен напрямую.")
+        st.error(
+            "Не удалось определить сайт. Переключите режим и введите домен компании напрямую (например, lakond.ru)."
+        )
         st.stop()
 
-    st.success(f"🌐 Официальный сайт найден: `{domain}`")
+    st.success(f"🌐 Подключено к официальному сайту: `{domain}`")
 
     # ==========================================
     # ШАГ 1: ПРИОРИТЕТНЫЙ ПОИСК ФАЙЛОВ КАТАЛОГОВ
     # ==========================================
-    with st.spinner("ШАГ 1: Проверяем наличие готовых файлов каталогов и прайсов (PDF / Excel)..."):
-        documents = scan_for_documents_only(domain, company_input if mode == "🔍 По названию компании" else domain)
+    with st.spinner(
+        "ШАГ 1: Сканируем сайт на наличие официальных файлов (PDF / Excel)..."
+    ):
+        documents = scan_for_documents_only(domain)
 
     if documents:
-        # Успех! Нашли файлы. Отменяем сканирование картинок.
         st.markdown("---")
-        st.success(f"🎉 **НАЙДЕН ОФИЦИАЛЬНЫЙ КАТАЛОГ / ПРАЙС-ЛИСТ (ФАЙЛЫ: {len(documents)})!**")
-        st.info("💡 **Поиск картинок на сайте отменен**, так как найден полный официальный файл.")
+        st.success(
+            f"🎉 **НАЙДЕН ОФИЦИАЛЬНЫЙ КАТАЛОГ / ПРАЙС-ЛИСТ (ФАЙЛОВ: {len(documents)})!**"
+        )
+        st.info(
+            "💡 **Поиск картинок отменен**, так как найден полный официальный файл каталога."
+        )
 
         for doc in documents:
-            icon = "📕 PDF" if ".pdf" in doc["link"].lower() else "📊 EXCEL"
+            icon = "📕 PDF" if ".pdf" in doc["link"].lower() else "📊 EXCEL / DOC"
             st.markdown(
                 f"""
                 <div class="doc-card">
@@ -465,20 +503,21 @@ if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primar
 
     else:
         # ==========================================
-        # ШАГ 2: РЕЗЕРВНЫЙ СБОР КАРТОЧЕК С САЙТА
+        # ШАГ 2: СБОР КАРТОЧЕК С САЙТА (ЕСЛИ ФАЙЛОВ НЕТ)
         # ==========================================
-        st.warning("⚠️ **Прямые файлы PDF/Excel не найдены.**")
-        st.info("🔄 Автоматически переходим к **Сбору карточек товаров, названий и веса напрямую с сайта**...")
+        st.warning("⚠️ **Прямые файлы PDF/Excel на страницах сайта не найдены.**")
+        st.info(
+            "🔄 Автоматически переходим к **Сбору карточек товаров, названий и веса с сайта**..."
+        )
 
-        with st.spinner("Собираем товары с фотографиями высокаго качества..."):
+        with st.spinner("Собираем карточки подарков и упаковки в высоком качестве..."):
             products = scan_products_fallback(domain)
 
         st.markdown("---")
 
         if products:
-            st.success(f"Найдено и обработано карточек товаров: **{len(products)}**")
+            st.success(f"Обработано карточек товаров с фото: **{len(products)}**")
 
-            # Кнопка скачивания ZIP
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 for idx, prod in enumerate(products, start=1):
@@ -496,7 +535,6 @@ if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primar
 
             st.markdown("---")
 
-            # Отображение карточек
             cols = st.columns(4)
             for idx, prod in enumerate(products):
                 with cols[idx % 4]:
@@ -511,7 +549,30 @@ if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primar
                     )
                     st.image(prod["img_bytes"], use_container_width=True)
         else:
-            st.error("На сайте не удалось автоматически найти ни PDF-файлы, ни открытые карточки товаров.")
+            st.error(
+                "На сайте не удалось выгрузить файлы или карточки товаров."
+            )
+
+    # Резервные кнопки быстрых переходов
+    st.markdown("---")
+    st.write("### 🔍 Быстрый доступ к поисковикам:")
+    c1, c2, c3 = st.columns(3)
+    clean_q = urllib.parse.quote(f'"{domain}" новогодние подарки каталог {TARGET_YEAR}')
+    with c1:
+        st.link_button(
+            "📕 PDF в Google",
+            f"https://www.google.com/search?q={clean_q}+filetype:pdf",
+        )
+    with c2:
+        st.link_button(
+            "📊 Прайсы в Яндекс",
+            f"https://yandex.ru/search/?text={clean_q}+прайс+xls",
+        )
+    with c3:
+        st.link_button(
+            "📱 Группы в VK",
+            f"https://vk.com/search?c%5Bsection%5D=auto&c%5Bq%5D={clean_q}",
+        )
 
 st.divider()
-st.caption(f"Поиск оптимизирован под сезон {TARGET_YEAR}. Сначала загружаются официальные документы.")
+st.caption(f"Поиск оптимизирован под сезон {TARGET_YEAR}. Сначала ищутся файлы.")
