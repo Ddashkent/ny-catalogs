@@ -200,4 +200,87 @@ def scan_products(domain):
 
     def parse_page(url):
         items = []
-        _, p_html 
+        _, p_html = get_html(url)
+        if not p_html: return []
+        p_soup = BeautifulSoup(p_html, "html.parser")
+        
+        # Удаляем мусорные блоки
+        for junk in p_soup.find_all(["footer", "header", "nav", "aside"]): junk.decompose()
+        
+        # Ищем карточки товаров
+        cards = p_soup.find_all(["div", "li", "article"], class_=re.compile(r"product|item|card|goods", re.I))
+        if not cards: cards = p_soup.find_all("img")
+
+        for card in cards:
+            img = card if card.name == "img" else card.find("img")
+            if not img: continue
+            src = img.get("data-src") or img.get("data-original") or img.get("src")
+            if not src or any(bad in src.lower() for bad in ["logo", "icon", "banner", "bg-", "vk"]): continue
+            
+            full_img = fix_url(url, src)
+            text = card.get_text(" ", strip=True) if card.name != "img" else ""
+            combined = (text + " " + (img.get("alt") or "")).lower()
+
+            if any(bad in combined for bad in JUNK_ITEMS): continue
+
+            if full_img not in seen_imgs:
+                seen_imgs.add(full_img)
+                weight = WEIGHT_REGEX.search(text)
+                title = img.get("alt") or img.get("title") or text[:50]
+                items.append({"title": title.strip(), "weight": weight.group(1) if weight else None, "url": full_img})
+        return items
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        for res in executor.map(parse_page, list(all_pages)[:12]): raw_items.extend(res)
+
+    # Загружаем байты
+    validated = []
+    def validate(p):
+        b = download_img(p['url'])
+        if b:
+            p['bytes'] = b; return p
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        validated = [r for r in executor.map(validate, raw_items[:120]) if r]
+    
+    return validated
+
+# -----------------------------
+# ИНТЕРФЕЙС
+# -----------------------------
+
+query = st.text_input("Название фабрики или сайт:", placeholder="Например: Акконд, Рубин, Рэйд 21...")
+
+if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary", use_container_width=True):
+    if query:
+        domain = normalize_domain(query)
+        st.success(f"🌐 Подключено к источнику: `{domain}`")
+        
+        with st.spinner("ШАГ 1: Ищем официальные PDF..."):
+            docs = scan_docs(domain)
+        
+        if docs:
+            st.success(f"🎉 НАЙДЕН ОФИЦИАЛЬНЫЙ КАТАЛОГ!")
+            for d in docs:
+                st.markdown(f'<div class="doc-card"><b>📄 {d["title"]}</b><br><a href="{d["url"]}" target="_blank" class="btn-doc">📥 СКАЧАТЬ ФАЙЛ</a></div>', unsafe_allow_html=True)
+        else:
+            with st.spinner("ШАГ 2: Файлов нет. Выгружаю все страницы каталога с коробками..."):
+                items = scan_products(domain)
+            
+            if items:
+                st.success(f"Успешно выгружено: **{len(items)} шт.**")
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, "w") as zf:
+                    for i, it in enumerate(items): zf.writestr(f"box_{i+1:02d}.jpg", it['bytes'])
+                st.download_button("📥 СКАЧАТЬ ВСЕ В ZIP", zip_buf.getvalue(), f"{domain}_catalog.zip", "application/zip")
+
+                st.markdown("---")
+                cols = st.columns(4)
+                for idx, it in enumerate(items):
+                    with cols[idx % 4]:
+                        st.markdown('<div class="product-card">', unsafe_allow_html=True)
+                        st.image(it['bytes'], use_container_width=True)
+                        st.markdown(f'<div class="product-title">{it["title"][:55]}</div><span class="badge-cardboard">📦 КАРТОН</span><br><b>{it["weight"] or ""}</b></div>', unsafe_allow_html=True)
+            else:
+                st.error("На сайте не удалось найти картонную упаковку. Возможно, раздел пуст или закрыт.")
