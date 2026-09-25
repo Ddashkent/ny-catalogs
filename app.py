@@ -97,10 +97,12 @@ st.markdown(
 )
 
 st.title(f"📦 Анализ Новогодней Упаковки {TARGET_YEAR}")
-st.caption("Приоритет: Поиск официальных PDF/Excel каталогов. Извлечение оригинальных коробок и подарков без рекламных баннеров и юр. мусора.")
+st.caption(
+    "Приоритетный поиск официальных PDF/Excel каталогов. Точный снайперский переход в новогодние разделы каталогов."
+)
 
 # -----------------------------
-# БАЗА ЗНАНИЙ И ТОЧНЫЕ АДРЕСА
+# БАЗА ЗНАНИЙ И ТОЧНЫЕ ССЫЛКИ КАТЕГОРИЙ
 # -----------------------------
 
 SITE_MAP = {
@@ -124,11 +126,11 @@ SITE_MAP = {
     "славянка": "slavyanka.ru",
 }
 
-# Точные целевые разделы подарков
+# Прямые ссылки на разделы Нового Года на сайтах
 DIRECT_GIFT_URLS = {
     "akkond.ru": [
+        "https://akkond.ru/catalog/novyy_god/",
         "https://akkond.ru/catalog/novogodnie-podarki/",
-        "https://akkond.ru/catalog/",
     ],
     "rubin-2000.ru": [
         "https://rubin-2000.ru/catalog/",
@@ -145,23 +147,26 @@ DIRECT_GIFT_URLS = {
     "lakond.ru": ["https://lakond.ru/products/"],
 }
 
-# БЛОКИРОВКА ЮРИДИЧЕСКИХ ФАЙЛОВ И ПРЕЗЕНТАЦИЙ
-DOC_BLACKLIST = [
-    "презентация", "соглашение", "политика", "конфиденциальности", 
-    "договор", "оферта", "вакансии", "реквизиты", "cookies"
+# 1. ЗАБЛОКИРОВАННЫЕ РАЗДЕЛЫ (НОВОСТИ, БЛОГИ, О НАС)
+FORBIDDEN_URL_PATHS = [
+    "/news", "/novosti", "/press", "/sobytiya", "/media", "/blog", 
+    "/about", "/company", "/o-nas", "/history", "/stati", "/article"
 ]
 
-# ОБЯЗАТЕЛЬНЫЕ СЛОВА ДЛЯ КАТАЛОГА
-DOC_WHITELIST = ["каталог", "прайс", "price", "catalog", "подарки", "упаковка"]
+# 2. ЗАБЛОКИРОВАННЫЕ СЛОВА (Презентации, Соглашения, Новости)
+FORBIDDEN_TITLES = [
+    "презентация", "соглашение", "политика", "конфиденциальности", "договор", 
+    "оферта", "вакансии", "реквизиты", "cookies", "кубок", "чувашии", 
+    "коллектив", "выставка", "награда", "диплом", "акция", "конкурс", "новости"
+]
 
-# СЛУЖЕБНЫЕ ИКОНКИ И ЛОГОТИПЫ, КОТОРЫЕ ПРОПУСКАЕМ
+# 3. ФИЛЬТР ШТУЧНЫХ КОНФЕТ И ТЕКСТИЛЯ
+TEXTILE_AND_TOY_JUNK = [
+    "текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка", "мешок"
+]
+
 JUNK_IMAGE_WORDS = [
     "logo", "icon", "banner", "slider", "bg-", "social", "avatar", "payment", "delivery", "vk"
-]
-
-# ИСКЛЮЧАЕМ ТЕКСТИЛЬ И МЯГКИЕ ИГРУШКИ
-TEXTILE_AND_TOY_JUNK = [
-    "текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка"
 ]
 
 HEADERS = {
@@ -192,6 +197,8 @@ def fix_and_encode_url(base_url: str, src: str) -> str:
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, parsed.fragment))
 
 def get_html(url: str):
+    if any(bad_path in url.lower() for bad_path in FORBIDDEN_URL_PATHS):
+        return None, None
     try:
         res = requests.get(url, headers=HEADERS, timeout=8, verify=False)
         if res.status_code == 200:
@@ -200,7 +207,25 @@ def get_html(url: str):
         pass
     return None, None
 
-# --- ШАГ 1: ПОИСК PDF / EXCEL КАТАЛОГОВ ---
+def find_domain_dynamic(company_name: str) -> str:
+    q_low = company_name.lower().strip()
+    dom = normalize_domain(q_low)
+    if dom:
+        return dom
+    try:
+        from duckduckgo_search import DDGS
+        query = f'"{company_name}" новогодняя упаковка подарки официальный сайт'
+        with DDGS() as ddgs:
+            res = list(ddgs.text(query, region="ru-ru", max_results=4))
+            for r in res:
+                link = r.get("href", "")
+                if link and not any(bad in link for bad in ["wikipedia", "vk.com", "youtube", "checko"]):
+                    return normalize_domain(link)
+    except Exception:
+        pass
+    return None
+
+# --- ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ) ---
 
 def scan_documents(domain: str):
     docs, seen = [], set()
@@ -220,10 +245,10 @@ def scan_documents(domain: str):
             if any(ext in href for ext in [".pdf", ".xlsx", ".xls"]):
                 combined = f"{text} {href}"
                 # 1. ЗАБЛОКИРОВАТЬ ПРЕЗЕНТАЦИИ И СОГЛАШЕНИЯ
-                if any(bad in combined for bad in DOC_BLACKLIST):
+                if any(bad in combined for bad in FORBIDDEN_TITLES):
                     continue
                 # 2. ТРЕБОВАТЬ СЛОВА КАТАЛОГ ИЛИ ПРАЙС
-                if any(good in combined for good in DOC_WHITELIST):
+                if any(good in combined for good in ["каталог", "прайс", "подарки", "2026", "2025", "catalog", "price"]):
                     if full_link not in seen:
                         seen.add(full_link)
                         docs.append({"title": a.get_text().strip() or "Официальный каталог 2026", "url": full_link})
@@ -261,7 +286,8 @@ def download_product_image(img_url: str):
     return None
 
 def scan_product_boxes(domain: str):
-    urls = DIRECT_GIFT_URLS.get(domain, [f"https://{domain}/catalog/novogodnie-podarki/", f"https://{domain}/catalog/"])
+    # Берем точные целевые адреса Нового года
+    urls = DIRECT_GIFT_URLS.get(domain, [f"https://{domain}/catalog/novyy_god/", f"https://{domain}/catalog/novogodnie-podarki/", f"https://{domain}/catalog/"])
 
     raw_items = []
     seen_imgs = set()
@@ -273,8 +299,8 @@ def scan_product_boxes(domain: str):
 
         soup = BeautifulSoup(html, "html.parser")
 
-        # Удаляем из поиска шапку, подвал и сервисные блоки
-        for junk in soup.find_all(["footer", "header", "nav"], class_=re.compile(r"footer|header|slider|partner|brand", re.I)):
+        # Удаляем из поиска новости, статьи, шапку и подвал
+        for junk in soup.find_all(["footer", "header", "nav", "aside"], class_=re.compile(r"news|blog|article|partner|brand|footer|header|slider", re.I)):
             junk.decompose()
 
         cards = soup.find_all(
@@ -311,7 +337,11 @@ def scan_product_boxes(domain: str):
             text = card.get_text(" ", strip=True) if card.name != "img" else ""
             combined_text = (text + " " + (img.get("alt") or "")).lower()
 
-            # Отсекаем текстиль и мягкие игрушки
+            # 1. ОТСЕКАЕМ НОВОСТИ И СТАТЬИ ПО НАЗВАНИЮ
+            if any(bad in combined_text for bad in FORBIDDEN_TITLES):
+                continue
+
+            # 2. ОТСЕКАЕМ ТЕКСТИЛЬ И МЯГКИЕ ИГРУШКИ
             if any(bad in combined_text for bad in TEXTILE_AND_TOY_JUNK):
                 continue
 
@@ -325,7 +355,7 @@ def scan_product_boxes(domain: str):
                 seen_imgs.add(full_img_url)
                 raw_items.append({"title": title, "weight": weight, "img_url": full_img_url})
 
-    # Загружаем только прошедшие фильтр подарки в многопоточном режиме
+    # Загружаем байты фото в многопоточном режиме
     validated = []
     def validate(p):
         info = download_product_image(p["img_url"])
@@ -346,7 +376,7 @@ def scan_product_boxes(domain: str):
 
 company_input = st.text_input(
     "Введите название компании или адрес её сайта:",
-    placeholder="Например: Акконд, Рубин, Лаконд, Рэйд 21, akkond.ru...",
+    placeholder="Например: Акконд, АККОНД, Рубин, Лаконд, Рэйд 21, akkond.ru...",
 )
 
 if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary", use_container_width=True):
@@ -358,7 +388,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
     if domain:
         st.success(f"🌐 Официальный раздел подключен: `{domain}`")
 
-        # ШАГ 1: ПОИСК PDF КАТАЛОГОВ
+        # ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ)
         with st.spinner("ШАГ 1: Проверяем наличие PDF/Excel каталогов..."):
             documents = scan_documents(domain)
 
@@ -380,7 +410,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                 )
         else:
             # ШАГ 2: ИЗВЛЕЧЕНИЕ ТОЛЬКО НОВОГОДНИХ ПОДАРКОВ
-            with st.spinner("ШАГ 2: Извлекаем фотографии подарков и коробок из каталога..."):
+            with st.spinner("ШАГ 2: Извлекаем фотографии подарков и коробок из раздела Новый Год..."):
                 products = scan_product_boxes(domain)
 
             st.markdown("---")
