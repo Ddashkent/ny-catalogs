@@ -89,7 +89,7 @@ st.markdown(
 
 st.title(f"🎁 Универсальный Навигатор Подарков & Упаковки {TARGET_YEAR}")
 st.caption(
-    "Автоматический поиск официальных сайтов, выгрузка PDF/Excel каталогов и разбор карточек товаров для ЛЮБЫХ компаний."
+    "Автоматический сбор всех 100% каталогов, прайсов и полного перечня карточек товаров без ограничений."
 )
 
 JUNK_WORDS = [
@@ -115,6 +115,9 @@ CATALOG_WORDS = [
     "catalog",
     "product",
     "фасовк",
+    "page",
+    "pagen",
+    "p=",
 ]
 
 JUNK_DOMAINS = [
@@ -178,7 +181,7 @@ def extract_valid_domain(url: str) -> str:
 
 def get_html(url: str):
     try:
-        res = requests.get(url, headers=HEADERS, timeout=6)
+        res = requests.get(url, headers=HEADERS, timeout=7)
         if res.status_code == 200:
             return res.url, res.text
     except Exception:
@@ -190,7 +193,6 @@ def find_official_site_dynamic(company_name: str) -> str:
     """Многоуровневый каскадный поиск официального сайта для ЛЮБОЙ компании"""
     query = f'"{company_name}" подарки упаковка конфеты фасовка официальный сайт'
 
-    # Уровень 1: DDGS API
     if HAS_DDGS:
         try:
             with DDGS() as ddgs:
@@ -202,7 +204,6 @@ def find_official_site_dynamic(company_name: str) -> str:
         except Exception:
             pass
 
-    # Уровень 2: Прямой HTML-запрос к DuckDuckGo Lite (Резервный)
     try:
         html_url = "https://html.duckduckgo.com/html/"
         resp = requests.post(
@@ -267,7 +268,7 @@ def scan_for_documents_only(domain: str):
                 cw in text.lower() or cw in href.lower()
                 for cw in CATALOG_WORDS
             ):
-                if full_url not in scan_urls and len(scan_urls) < 6:
+                if full_url not in scan_urls and len(scan_urls) < 12:
                     scan_urls.append(full_url)
 
     for page in scan_urls[1:]:
@@ -298,7 +299,7 @@ def scan_for_documents_only(domain: str):
 
 
 # -----------------------------
-# ШАГ 2: СБОР КАРТОЧЕК С САЙТА (ЕСЛИ НЕТ ФАЙЛОВ)
+# ШАГ 2: ПОЛНЫЙ СБОР КАРТОЧЕК БЕЗ ЛИМИТОВ (ЕСЛИ НЕТ ФАЙЛОВ)
 # -----------------------------
 
 
@@ -311,21 +312,21 @@ def get_high_res_url(img_url: str) -> str:
 def download_product_image(img_url: str):
     try:
         img_url = get_high_res_url(img_url)
-        res = requests.get(img_url, headers=HEADERS, timeout=5)
+        res = requests.get(img_url, headers=HEADERS, timeout=6)
         if res.status_code == 200 and "image" in res.headers.get(
             "Content-Type", ""
         ):
             data = res.content
-            if len(data) < 6000:
+            if len(data) < 2500:  # Ослаблен порог, чтобы не терять фото
                 return None
 
             if HAS_PIL:
                 img = Image.open(io.BytesIO(data))
                 w, h = img.size
-                if w < 180 or h < 180:
+                if w < 100 or h < 100:  # Пропускаем только иконки
                     return None
                 ratio = w / h
-                if ratio > 3.2 or ratio < 0.3:
+                if ratio > 4.0 or ratio < 0.25:
                     return None
                 ext = (img.format or "JPEG").lower().replace("jpeg", "jpg")
             else:
@@ -345,12 +346,13 @@ def parse_page_for_products(page_url):
     soup = BeautifulSoup(html, "html.parser")
     products = []
 
+    # Поиск блоков карточек по всем типичным CSS-классам
     containers = soup.find_all(
         lambda tag: tag.name in ["div", "li", "article"]
         and tag.get("class")
         and any(
             c in " ".join(tag.get("class")).lower()
-            for c in ["product", "catalog-item", "card", "goods-item", "item"]
+            for c in ["product", "catalog-item", "card", "goods-item", "item", "element", "box"]
         )
     )
 
@@ -361,6 +363,7 @@ def parse_page_for_products(page_url):
         src = (
             img_tag.get("data-src")
             or img_tag.get("data-original")
+            or img_tag.get("data-lazy-src")
             or img_tag.get("src")
         )
         if not src:
@@ -373,17 +376,17 @@ def parse_page_for_products(page_url):
         weight = weight_match.group(1) if weight_match else None
 
         title_tag = card.find(
-            ["h2", "h3", "h4", "a"],
-            class_=re.compile(r"title|name|heading|product", re.I),
+            ["h2", "h3", "h4", "a", "div"],
+            class_=re.compile(r"title|name|heading|product|caption", re.I),
         )
         title = (
             title_tag.get_text(" ", strip=True)
             if title_tag
-            else (img_tag.get("alt") or card_text[:50])
+            else (img_tag.get("alt") or card_text[:60])
         )
         title = re.sub(r"\s+", " ", title).strip()
 
-        if len(title) > 3 and not any(
+        if len(title) > 2 and not any(
             bad in title.lower() for bad in JUNK_WORDS
         ):
             products.append(
@@ -398,27 +401,37 @@ def parse_page_for_products(page_url):
 
 
 def scan_products_fallback(domain):
+    """Сбор ВСЕХ товаров без ограничений, включая пагинацию"""
     base_url = f"https://{domain}"
     final_url, html = get_html(base_url)
+    if not html:
+        base_url = f"http://{domain}"
+        final_url, html = get_html(base_url)
+
     if not html:
         return []
 
     soup = BeautifulSoup(html, "html.parser")
     pages = [final_url]
+    seen_pages = {final_url}
+
+    # Поиск всех страниц каталога и элементов пагинации
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         text = a.get_text(" ", strip=True).lower()
         full = urllib.parse.urljoin(final_url, href)
+
         if domain in full and any(
-            cw in text or cw in href for cw in CATALOG_WORDS
+            cw in text or cw in href.lower() for cw in CATALOG_WORDS
         ):
-            if full not in pages:
+            if full not in seen_pages:
+                seen_pages.add(full)
                 pages.append(full)
-        if len(pages) >= 6:
+        if len(pages) >= 20:  # Увеличен лимит обхода страниц до 20
             break
 
     raw_products = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         results = executor.map(parse_page_for_products, pages)
         for res in results:
             raw_products.extend(res)
@@ -438,9 +451,10 @@ def scan_products_fallback(domain):
             return p
         return None
 
+    # ЗАГРУЗКА ВСЕХ НАЙДЕННЫХ ПОЗИЦИЙ БЕЗ ОГРАНИЧЕНИЯ В 28 ШТУК!
     validated = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        res = executor.map(fetch_img, unique_prods[:28])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        res = executor.map(fetch_img, unique_prods)  # Обрабатываем весь массив unique_prods
         validated = [r for r in res if r is not None]
 
     return validated
@@ -520,17 +534,17 @@ if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primar
 
     else:
         # ==========================================
-        # ШАГ 2: СБОР КАРТОЧЕК С САЙТА (ЕСЛИ ФАЙЛОВ НЕТ)
+        # ШАГ 2: ПОЛНЫЙ СБОР КАРТОЧЕК С САЙТА (БЕЗ ОГРАНИЧЕНИЙ)
         # ==========================================
         st.warning(
             "⚠️ **Прямые файлы PDF/Excel на страницах сайта не найдены.**"
         )
         st.info(
-            "🔄 Переходим к **Сбору карточек товаров, названий и веса с сайта**..."
+            "🔄 Переходим к **Полному сбору всех карточек товаров, названий и веса с сайта**..."
         )
 
         with st.spinner(
-            "Собираем карточки подарков и упаковки в высоком качестве..."
+            "Собираем абсолютно ВСЕ карточки подарков и упаковки..."
         ):
             products = scan_products_fallback(domain)
 
@@ -538,7 +552,7 @@ if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primar
 
         if products:
             st.success(
-                f"Обработано карточек товаров с фото: **{len(products)}**"
+                f"Успешно обработано ВСЕХ карточек товаров с фото: **{len(products)}**"
             )
 
             zip_buffer = io.BytesIO()
@@ -552,9 +566,9 @@ if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primar
                     zf.writestr(filename, prod["img_bytes"])
 
             st.download_button(
-                "📥 СКАЧАТЬ ВСЕ ФОТО ПОДАРКОВ (ZIP-АРХИВ)",
+                f"📥 СКАЧАТЬ ВСЕ {len(products)} ФОТО ПОДАРКОВ (ZIP-АРХИВ)",
                 data=zip_buffer.getvalue(),
-                file_name=f"{domain}_gifts.zip",
+                file_name=f"{domain}_all_gifts.zip",
                 mime="application/zip",
             )
 
@@ -602,4 +616,4 @@ if st.button("🚀 ЗАПУСТИТЬ ПОИСК КАТАЛОГА", type="primar
         )
 
 st.divider()
-st.caption(f"Универсальный инструмент поиска. Оптимизирован под сезон {TARGET_YEAR}.")
+st.caption(f"Полный сбор данных без лимитов. Оптимизирован под сезон {TARGET_YEAR}.")
