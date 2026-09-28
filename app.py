@@ -22,7 +22,7 @@ except ImportError:
 # -----------------------------
 
 st.set_page_config(
-    page_title="Первый Снег | Каталоги & Упаковка 2026",
+    page_title="Первый Снег | Экстрактор Упаковки 2026",
     page_icon="❄️",
     layout="wide",
 )
@@ -47,7 +47,7 @@ st.markdown(
     /* Нежный редкий снег */
     @keyframes snowfall {
         0% { transform: translateY(-10px) translateX(0); opacity: 0; }
-        20% { opacity: 0.3; }
+        20% { opacity: 0.4; }
         100% { transform: translateY(100vh) translateX(20px); opacity: 0.05; }
     }
     .snowflake {
@@ -96,19 +96,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title(f"📦 Экстрактор Новогодней Упаковки {TARGET_YEAR}")
+st.title(f"📦 Анализ Новогодней Упаковки {TARGET_YEAR}")
 st.caption(
-    "Приоритет: Поиск официальных PDF/Excel каталогов. Извлечение карточек коробок без презентаций и рекламных логотипов."
+    "Глубокий поиск ВСЕХ официальных PDF/Excel каталогов. Извлечение карточек коробок без презентаций и рекламных логотипов."
 )
 
 # -----------------------------
-# БАЗА ЗНАНИЙ И КАРТА ПУТЕЙ
+# БАЗА ЗНАНИЙ И ТОЧНЫЕ АДРЕСА
 # -----------------------------
 
 SITE_MAP = {
     "спартак": "spartak.by",
-    "рубин": "rubin-2000.ru",
     "акконд": "akkond.ru",
+    "рубин": "rubin-2000.ru",
     "академия шоколада": "chocolate-academy.ru",
     "лаконд": "lakond.ru",
     "донко": "donko.su",
@@ -143,13 +143,13 @@ DIRECT_GIFT_URLS = {
         "https://spartak.by/catalog/",
         "https://spartak.by/",
     ],
-    "rubin-2000.ru": [
-        "https://rubin-2000.ru/catalog/",
-        "https://rubin-2000.ru/catalog/upakovka/",
-    ],
     "akkond.ru": [
         "https://akkond.ru/catalog/novyy_god/",
         "https://akkond.ru/catalog/novogodnie-podarki/",
+    ],
+    "rubin-2000.ru": [
+        "https://rubin-2000.ru/catalog/",
+        "https://rubin-2000.ru/catalog/upakovka/",
     ],
     "podarki-reid21.ru": [
         "https://podarki-reid21.ru/present-category/novogodnie-podarki-2027/podarki-v-kartonnoj-upakovke-novogodnie-podarki-2027/",
@@ -162,7 +162,7 @@ DIRECT_GIFT_URLS = {
     "lakond.ru": ["https://lakond.ru/products/"],
 }
 
-# ЖЕСТКАЯ БЛОКИРОВКА ПРЕЗЕНТАЦИЙ И ЮРИДИЧЕСКОГО МУСОРА
+# БЛОКИРОВКА ЮРИДИЧЕСКИХ ФАЙЛОВ И ПРЕЗЕНТАЦИЙ
 DOC_BLACKLIST = [
     "презентация", "соглашение", "политика", "конфиденциальности", 
     "договор", "оферта", "вакансии", "реквизиты", "cookies", "устав", "паспорт", "сертификат"
@@ -238,33 +238,67 @@ def find_domain_dynamic(company_name: str) -> str:
         pass
     return None
 
-# --- ШАГ 1: ГЛУБОКИЙ ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ И ЮР. МУСОРА) ---
+# --- ШАГ 1: ГЛУБОКИЙ ПОИСК ВСЕХ PDF/EXCEL КАТАЛОГОВ ---
 
 def scan_documents(domain: str):
+    """Находит 100% всех файлов каталогов на сайте"""
     docs, seen = [], set()
-    base = f"https://{domain}"
-    urls = DIRECT_GIFT_URLS.get(domain, [base, f"{base}/catalog/", f"{base}/podarki/", f"{base}/download/"])
+    base_url = f"https://{domain}"
+    
+    # Собираем список всех потенциальных страниц
+    urls_to_scan = [base_url]
+    if domain in DIRECT_GIFT_URLS:
+        urls_to_scan.extend(DIRECT_GIFT_URLS[domain])
 
-    for url in urls:
-        _, html = get_html(url)
-        if not html:
-            continue
-        soup = BeautifulSoup(html, "html.parser")
-
+    _, main_html = get_html(base_url)
+    if main_html:
+        soup = BeautifulSoup(main_html, "html.parser")
         for a in soup.find_all("a", href=True):
-            href = urllib.parse.unquote(a["href"]).lower()
+            href = a["href"].strip().lower()
             text = a.get_text().strip().lower()
-            full_link = fix_and_encode_url(url, a["href"])
+            
+            # Находим разделы каталога и загрузок
+            if any(kw in href or kw in text for kw in ["catalog", "katalog", "download", "skachat", "podarki", "novogod", "продукц"]):
+                full_p = fix_and_encode_url(base_url, a["href"])
+                if domain in full_p and full_p not in urls_to_scan and len(urls_to_scan) < 12:
+                    urls_to_scan.append(full_p)
+
+    def fetch_page_docs(page_url):
+        p_docs = []
+        _, page_html = get_html(page_url)
+        if not page_html:
+            return p_docs
+
+        p_soup = BeautifulSoup(page_html, "html.parser")
+        for a in p_soup.find_all("a", href=True):
+            href = urllib.parse.unquote(a["href"]).lower()
+            text = a.get_text().strip()
+            title_attr = a.get("title", "").strip()
+            full_link = fix_and_encode_url(page_url, a["href"])
 
             if any(ext in href for ext in [".pdf", ".xlsx", ".xls"]):
-                combined = f"{text} {href}"
-                # 1. ЗАБЛОКИРОВАТЬ ПРЕЗЕНТАЦИИ И СОГЛАШЕНИЯ
+                combined = f"{text} {title_attr} {href}".lower()
+
+                # БЛОКИРУЕМ ПРЕЗЕНТАЦИИ И СОГЛАШЕНИЯ
                 if any(bad in combined for bad in DOC_BLACKLIST):
                     continue
-                # 2. ПРИНИМАЕМ ВСЕ ОФИЦИАЛЬНЫЕ КАТАЛОГИ
-                if full_link not in seen:
-                    seen.add(full_link)
-                    docs.append({"title": a.get_text().strip() or "Официальный каталог 2026", "url": full_link})
+
+                # Формируем точное и понятное название каталога
+                doc_title = text or title_attr or a.parent.get_text().strip() or href.split("/")[-1]
+                doc_title = re.sub(r"\s+", " ", doc_title).strip()
+                if len(doc_title) > 90:
+                    doc_title = doc_title[:90] + "..."
+
+                p_docs.append({"title": doc_title or "Официальный каталог", "url": full_link})
+        return p_docs
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        for res in executor.map(fetch_page_docs, urls_to_scan):
+            for d in res:
+                if d["url"] not in seen:
+                    seen.add(d["url"])
+                    docs.append(d)
+
     return docs
 
 # --- ШАГ 2: ВЫГРУЗКА ТОЛЬКО ПОДАРКОВ И КОРОБОК ---
@@ -286,8 +320,8 @@ def download_product_image(img_url: str):
                     return None
 
                 ratio = w / h
-                # Подарочные коробки: пропорции от 0.35 до 1.6 (все логотипы партнеров и баннеры отсекаются)
-                if ratio > 1.6 or ratio < 0.35:
+                # Подарочные коробки: пропорции от 0.35 до 1.6
+                if ratio > 1.65 or ratio < 0.35:
                     return None
 
                 ext = (img.format or "JPEG").lower().replace("jpeg", "jpg")
@@ -367,7 +401,7 @@ def scan_product_boxes(domain: str):
                 seen_imgs.add(full_img_url)
                 raw_items.append({"title": title, "weight": weight, "img_url": full_img_url})
 
-    # Многопоточная валидация картинок
+    # Многопоточная валидация
     validated = []
     def validate(p):
         info = download_product_image(p["img_url"])
@@ -400,14 +434,14 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
     if domain:
         st.success(f"🌐 Официальный сайт подключен: `{domain}`")
 
-        # ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ)
-        with st.spinner("ШАГ 1: Проверяем наличие PDF/Excel каталогов..."):
+        # ШАГ 1: ПОИСК PDF КАТАЛОГОВ (ГЛУБОКИЙ СКАНИРОВАНИЕ ВСЕХ ФАЙЛОВ)
+        with st.spinner("ШАГ 1: Ищем ВСЕ официальные PDF/Excel каталоги на сайте..."):
             documents = scan_documents(domain)
 
         if documents:
             st.markdown("---")
-            st.success(f"🎉 **НАЙДЕН ОФИЦИАЛЬНЫЙ КАТАЛОГ (ФАЙЛОВ: {len(documents)})!**")
-            st.info("💡 Скачайте полный официальный файл каталога ниже.")
+            st.success(f"🎉 **НАЙДЕНЫ ОФИЦИАЛЬНЫЕ КАТАЛОГИ (ФАЙЛОВ: {len(documents)})!**")
+            st.info("💡 Скачайте официальные каталоги ниже.")
             for doc in documents:
                 icon = "📕 PDF" if ".pdf" in doc["url"].lower() else "📊 EXCEL / DOC"
                 st.markdown(
@@ -421,7 +455,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                     unsafe_allow_html=True,
                 )
         else:
-            # ШАГ 2: ИЗВЛЕЧЕНИЕ ТОЛЬКО НОВОГОДНИХ ПОДАРКОВ И КОРОБОК
+            # ШАГ 2: ИЗВЛЕЧЕНИЕ ТОЛЬКО НОВОГОДНИХ ПОДАРКОВ И КОРOБОК
             with st.spinner("ШАГ 2: Прямых PDF нет. Извлекаем фотографии подарков и коробок из каталога..."):
                 products = scan_product_boxes(domain)
 
