@@ -8,7 +8,7 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
-# Отключаем предупреждения SSL для сайтов с неподтвержденными сертификатами
+# Отключаем предупреждения SSL
 requests.packages.urllib3.disable_warnings()
 
 try:
@@ -22,14 +22,13 @@ except ImportError:
 # -----------------------------
 
 st.set_page_config(
-    page_title="Первый Снег | Универсальный Экстрактор Упаковки",
+    page_title="Первый Снег | Отраслевой Навигатор 2026",
     page_icon="❄️",
     layout="wide",
 )
 
 TARGET_YEAR = 2026
 
-# Брендинг "Первый Снег" + Нежный ненавязчивый снег
 st.markdown(
     """
     <style>
@@ -46,7 +45,7 @@ st.markdown(
     
     @keyframes snowfall {
         0% { transform: translateY(-10px) translateX(0); opacity: 0; }
-        20% { opacity: 0.3; }
+        20% { opacity: 0.4; }
         100% { transform: translateY(100vh) translateX(20px); opacity: 0.05; }
     }
     .snowflake {
@@ -95,32 +94,35 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title(f"📦 Универсальный Экстрактор Упаковки {TARGET_YEAR}")
-st.caption("Автоматический поисковый робот. Подходит для любого сайта компании, фасовщика или завода сладостей.")
+st.title(f"📦 Экстрактор Сладких Подарков & Упаковки {TARGET_YEAR}")
+st.caption(
+    "Узкоотраслевой поиск: Кондитерские фабрики, фасовщики подарков и оптовики сладостей. Спорт, новости и сторонний бизнес отсекаются."
+)
 
 # -----------------------------
-# ГЛОБАЛЬНЫЕ ФИЛЬТРЫ (БЕЗ ЖЕСТКИХ САЙТОВ)
+# ОТРАСЛЕВЫЕ МАРКЕРЫ И ЧЕРНЫЙ СПИСОК
 # -----------------------------
 
-# Блокировка презентаций, договоров и юридических соглашений
+# БЛОКИРОВКА СПОРТА, ФУТБОЛЬНЫХ КЛУБОВ И НЕПРОФИЛЬНЫХ САЙТОВ
+SPORTS_AND_NON_FOOD_BLACKLIST = [
+    "футбол", "футбольный", "fc", "клуб", "матч", "чемпионат", "стадион", 
+    "тренер", "турнир", "лига", "спартакиада", "спорт", "команда", "трансфер",
+    "fcsmaprtak", "spartak.com", "sports.ru", "championat", "matchtv"
+]
+
+# ОБЯЗАТЕЛЬНЫЕ ОТРAСЛЕВЫЕ МАРКЕРЫ (Сладости, Подарки, Упаковка, Фасовка)
+INDUSTRY_WHITE_WORDS = [
+    "конфет", "сладост", "кондитерск", "фабрика", "подарк", "упаковк", 
+    "фасовк", "шоколад", "набор", "коробк", "тубус", "картон"
+]
+
+# БЛОКИРОВКА ПРЕЗЕНТАЦИЙ И ЮРИДИЧЕСКОГО МУСОРА
 EXCLUDE_DOC_WORDS = [
     "презентаци", "соглашени", "политик", "конфиденциальн", "персональн", 
     "договор", "оферт", "устав", "реквизит", "ваканси", "privacy", "agreement", "cookies"
 ]
 
-# Словарные маркеры каталогов и подарков для поиска страниц
-CATALOG_PATH_KEYWORDS = [
-    "catalog", "katalog", "podarki", "upakovka", "produk", "shop", "store", 
-    "novogod", "present", "category", "assortiment", "подарки", "каталог", "упаковка"
-]
-
-# Блокировка служебных разделов
-JUNK_PATH_KEYWORDS = [
-    "/news", "/novosti", "/blog", "/about", "/o-nas", "/contacts", "/kontakty", 
-    "/delivery", "/dostavka", "/payment", "/oplata", "/privacy", "/policy"
-]
-
-# Исключаем текстиль, мягкую игрушку и технические элементы баннеров
+# ИСКЛЮЧАЕМ ТЕКСТИЛЬ, МЯГКУЮ ИГРУШКУ И БАННЕРЫ
 JUNK_IMAGE_WORDS = [
     "logo", "icon", "banner", "slider", "bg-", "social", "avatar", "payment", "delivery", "vk",
     "текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка"
@@ -132,57 +134,54 @@ HEADERS = {
 WEIGHT_REGEX = re.compile(r"(\d+(?:[\.,]\d+)?\s*(?:г|гр|грамм|кг|g|kg)\b)", re.IGNORECASE)
 
 # -----------------------------
-# УНИВЕРСАЛЬНЫЕ ФУНКЦИИ КРАУЛЕРА
+# ВСПАМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # -----------------------------
 
-def normalize_input_to_domain(input_text: str) -> str:
-    """Извлекает чистый домен из любого ввода (название или ссылка)"""
-    s = input_text.strip().lower()
-    if s.startswith("http://") or s.startswith("https://"):
-        return urllib.parse.urlparse(s).netloc.replace("www.", "")
-    if "." in s and " " not in s:
-        return s.split("/")[0].replace("www.", "")
+def normalize_domain(value: str) -> str:
+    v = value.strip().lower()
+    if "спартак" in v:
+        return "spartak.by" # Кондитерская фабрика Спартак (Гомель)
+    if "рэйд" in v or "reid" in v:
+        return "podarki-reid21.ru"
+    if "." in v and " " not in v:
+        return v.replace("https://", "").replace("http://", "").split("/")[0]
     return None
 
-def resolve_domain_universally(company_name: str) -> str:
-    """Универсально определяет сайт для любого введенного названия"""
-    # 1. Пробуем нормализовать напрямую
-    dom = normalize_input_to_domain(company_name)
-    if dom:
-        return dom
+def resolve_confectionery_domain(company_name: str) -> str:
+    """Узкоотраслевой поиск сайта кондитерских фабрик и фасовщиков"""
+    q_low = company_name.lower().strip()
+    
+    # 1. Точечные проверки известных совпадений
+    if "спартак" in q_low:
+        return "spartak.by"
+    
+    direct_dom = normalize_domain(company_name)
+    if direct_dom:
+        return direct_dom
 
-    # 2. Поисковый запрос без зашитых словарей
+    # 2. Строгий отраслевой поисковый запрос (исключаем футбол и спорт)
     try:
         from duckduckgo_search import DDGS
-        query = f'"{company_name}" официальный сайт подарки упаковка'
+        query = f'"{company_name}" (кондитерская фабрика OR "новогодние подарки" OR "упаковка подарков") -футбол -клуб -спорт'
         with DDGS() as ddgs:
-            res = list(ddgs.text(query, region="ru-ru", max_results=5))
+            res = list(ddgs.text(query, region="ru-ru", max_results=6))
             for r in res:
                 link = r.get("href", "")
-                if link and not any(bad in link for bad in ["wikipedia", "vk.com", "youtube", "checko", "list-org", "otzovik"]):
-                    parsed = urllib.parse.urlparse(link)
-                    return parsed.netloc.replace("www.", "")
-    except Exception:
-        pass
-
-    # 3. Резервный поиск
-    try:
-        query_enc = urllib.parse.quote(f'"{company_name}" официальный сайт')
-        resp = requests.get(f"https://html.duckduckgo.com/html/?q={query_enc}", headers=HEADERS, timeout=6)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for a in soup.find_all("a", class_="result__url", href=True):
-                target = urllib.parse.parse_qs(urllib.parse.urlparse(a["href"]).query).get("uddg", [a["href"]])[0]
-                netloc = urllib.parse.urlparse(target).netloc.replace("www.", "")
-                if netloc and not any(bad in netloc for bad in ["wikipedia", "vk.com", "youtube", "checko"]):
-                    return netloc
+                title = r.get("title", "").lower()
+                snippet = r.get("body", "").lower()
+                
+                # Проверка: сайт не должен быть спортивным
+                if not any(bad in link.lower() or bad in title or bad in snippet for bad in SPORTS_AND_NON_FOOD_BLACKLIST):
+                    # Сайт должен относиться к сладостям или подаркам
+                    if any(good in title or good in snippet for good in INDUSTRY_WHITE_WORDS):
+                        parsed = urllib.parse.urlparse(link)
+                        return parsed.netloc.replace("www.", "")
     except Exception:
         pass
 
     return None
 
 def fix_and_encode_url(base_url: str, src: str) -> str:
-    """Кодирует кириллические символы в URL для предотвращения битых картинок"""
     if not src:
         return None
     src = src.strip()
@@ -194,7 +193,8 @@ def fix_and_encode_url(base_url: str, src: str) -> str:
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, parsed.fragment))
 
 def get_html(url: str):
-    if any(bad in url.lower() for bad in JUNK_PATH_KEYWORDS):
+    # Пропускаем спортивные и служебные разделы
+    if any(bad in url.lower() for bad in SPORTS_AND_NON_FOOD_BLACKLIST + ["/news", "/blog", "/about"]):
         return None, None
     try:
         res = requests.get(url, headers=HEADERS, timeout=8, verify=False)
@@ -204,91 +204,48 @@ def get_html(url: str):
         pass
     return None, None
 
-def discover_catalog_urls(domain: str):
-    """Универсально находит ВСЕ разделы каталога на ЛЮБОМ сайте"""
-    base_url = f"https://{domain}"
-    final_url, html = get_html(base_url)
+# --- ШАГ 1: ПОИСК PDF/EXCEL КАТАЛОГОВ ---
+
+def scan_for_documents(domain: str):
+    docs, seen = [], set()
     
-    if not html:
-        base_url = f"http://{domain}"
-        final_url, html = get_html(base_url)
+    # Прямые продуктовые пути
+    urls = [
+        f"https://{domain}", 
+        f"https://{domain}/catalog/", 
+        f"https://{domain}/podarki/", 
+        f"https://{domain}/novogodnie-podarki/",
+        f"https://{domain}/catalog/novogodnie-podarki/",
+        f"https://{domain}/catalog/novyy_god/"
+    ]
 
-    if not html:
-        return []
-
-    soup = BeautifulSoup(html, "html.parser")
-    catalog_urls = [final_url]
-    seen = {final_url}
-
-    # 1. Поиск ссылок в меню сайта
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        text = a.get_text(" ", strip=True).lower()
-        full_link = fix_and_encode_url(final_url, href)
-
-        if full_link and domain in full_link:
-            if not any(bad in full_link.lower() for bad in JUNK_PATH_KEYWORDS):
-                if any(kw in full_link.lower() or kw in text for kw in CATALOG_PATH_KEYWORDS):
-                    clean_link = full_link.split("#")[0]
-                    if clean_link not in seen:
-                        seen.add(clean_link)
-                        catalog_urls.append(clean_link)
-
-    # 2. Стандартные резервные пути на случай закрытого JS-меню
-    standard_paths = ["/catalog/", "/katalog/", "/podarki/", "/novogodnie-podarki/", "/products/", "/upakovka/", "/shop/"]
-    for path in standard_paths:
-        test_url = f"https://{domain}{path}"
-        if test_url not in seen:
-            catalog_urls.append(test_url)
-
-    return catalog_urls[:15]
-
-# --- ШАГ 1: ПОИСК PDF / EXCEL ДOКУМЕНТОВ ---
-
-def scan_for_documents(catalog_urls: list):
-    docs = []
-    seen = set()
-
-    def scan_page_docs(url):
-        page_docs = []
-        p_url, html = get_html(url)
+    for url in urls:
+        _, html = get_html(url)
         if not html:
-            return []
+            continue
         soup = BeautifulSoup(html, "html.parser")
 
         for a in soup.find_all("a", href=True):
             href = urllib.parse.unquote(a["href"]).lower()
-            text = a.get_text().strip()
-            text_low = text.lower()
-            full_link = fix_and_encode_url(p_url, a["href"])
+            text = a.get_text().strip().lower()
+            full_link = fix_and_encode_url(url, a["href"])
 
-            if any(ext in href for ext in [".pdf", ".xlsx", ".xls", ".doc"]):
-                combined = f"{text_low} {href}"
-                # 1. ИСКЛЮЧАЕМ ПРЕЗЕНТАЦИИ, СОГЛАШЕНИЯ И ПОЛИТИКИ
+            if any(ext in href for ext in [".pdf", ".xlsx", ".xls"]):
+                combined = f"{text} {href}"
+                # БЛОКИРУЕМ ПРЕЗЕНТАЦИИ И СОГЛАШЕНИЯ
                 if any(bad in combined for bad in EXCLUDE_DOC_WORDS):
                     continue
-                # 2. ПРИНИМАЕМ КАТАЛОГИ И ПРАЙСЫ
-                page_docs.append({
-                    "title": text or "Официальный каталог / прайс-лист",
-                    "url": full_link
-                })
-        return page_docs
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        for res in executor.map(scan_page_docs, catalog_urls[:6]):
-            for d in res:
-                if d["url"] not in seen:
-                    seen.add(d["url"])
-                    docs.append(d)
-
+                # ТРЕБУЕМ КАТАЛОГ ИЛИ ПРАЙС
+                if any(good in combined for good in ["каталог", "прайс", "подарки", "2026", "2025", "catalog", "price"]):
+                    if full_link not in seen:
+                        seen.add(full_link)
+                        docs.append({"title": a.get_text().strip() or "Официальный каталог 2026", "url": full_link})
     return docs
 
-# --- ШАГ 2: УНИВЕРСАЛЬНАЯ ВЫГРУЗКА КАРТОЧЕК ТОВАРОВ И УПАКОВКИ ---
+# --- ШАГ 2: ВЫГРУЗКА КАРТОЧЕК ТОВАРОВ И УПАКОВКИ ---
 
 def download_and_validate_image(img_url: str):
-    """Качает фото, повышает качество и фильтрует баннеры сайта"""
     try:
-        # Автоматическая очистка Битрикс-ресайзов для максимального качества
         img_url = re.sub(r"/resize_cache/.*?/\d+_\d+_\d+/", "/upload/", img_url)
         img_url = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", img_url)
 
@@ -297,16 +254,11 @@ def download_and_validate_image(img_url: str):
             if HAS_PIL:
                 img = Image.open(io.BytesIO(res.content))
                 w, h = img.size
-
-                # Отсекаем иконки
                 if w < 120 or h < 120:
                     return None
-
-                # Пропорции коробок (баннеры шириной > 1.7 отсекаются)
                 ratio = w / h
-                if ratio > 1.7 or ratio < 0.35:
+                if ratio > 1.65 or ratio < 0.35:
                     return None
-
                 ext = (img.format or "JPEG").lower().replace("jpeg", "jpg")
             else:
                 ext = "jpg"
@@ -315,29 +267,36 @@ def download_and_validate_image(img_url: str):
         pass
     return None
 
-def parse_catalog_products(catalog_urls: list):
+def parse_confectionery_products(domain: str):
+    urls = [
+        f"https://{domain}/catalog/novogodnie-podarki/",
+        f"https://{domain}/catalog/novyy_god/",
+        f"https://{domain}/catalog/",
+        f"https://{domain}/podarki/",
+        f"https://{domain}/products/",
+        f"https://{domain}"
+    ]
+
     raw_products = []
     seen_imgs = set()
 
-    def parse_single_url(page_url):
-        p_items = []
-        p_url, html = get_html(page_url)
+    for page_url in urls:
+        _, html = get_html(page_url)
         if not html:
-            return []
+            continue
 
         soup = BeautifulSoup(html, "html.parser")
 
-        # Удаляем подвал, шапку и плашки партнеров
+        # Удаляем служебные блоки
         for junk in soup.find_all(["footer", "header", "nav", "aside"], class_=re.compile(r"footer|header|slider|partner|brand", re.I)):
             junk.decompose()
 
-        # Ищем карточки товаров на любых CMS (Битрикс, Tilda, WooCommerce, InSales)
         cards = soup.find_all(
             lambda t: t.name in ["div", "li", "article", "section"]
             and t.get("class")
             and any(
                 c in " ".join(t.get("class")).lower()
-                for c in ["product", "catalog-item", "card", "item", "goods", "element", "b-catalog"]
+                for c in ["product", "catalog-item", "card", "item", "goods", "element"]
             )
         )
         if not cards:
@@ -360,15 +319,15 @@ def parse_catalog_products(catalog_urls: list):
             if any(bad in src.lower() for bad in JUNK_IMAGE_WORDS):
                 continue
 
-            full_img_url = fix_and_encode_url(p_url, src)
+            full_img_url = fix_and_encode_url(page_url, src)
             if not full_img_url or full_img_url in seen_imgs:
                 continue
 
             text = card.get_text(" ", strip=True) if card.name != "img" else ""
             combined_text = (text + " " + (img.get("alt") or "")).lower()
 
-            # Исключаем текстиль и игрушки
-            if any(bad in combined_text for bad in JUNK_IMAGE_WORDS):
+            # Исключаем текстиль, игрушки и футбол
+            if any(bad in combined_text for bad in JUNK_IMAGE_WORDS + SPORTS_AND_NON_FOOD_BLACKLIST):
                 continue
 
             weight_match = WEIGHT_REGEX.search(text)
@@ -379,15 +338,9 @@ def parse_catalog_products(catalog_urls: list):
 
             if len(title) > 2:
                 seen_imgs.add(full_img_url)
-                p_items.append({"title": title, "weight": weight, "img_url": full_img_url})
+                raw_products.append({"title": title, "weight": weight, "img_url": full_img_url})
 
-        return p_items
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        for res in executor.map(parse_single_url, catalog_urls):
-            raw_products.extend(res)
-
-    # Многопоточная выкачка байтов изображений
+    # Многопоточная выкачка
     validated = []
     def validate(p):
         info = download_and_validate_image(p["img_url"])
@@ -398,7 +351,7 @@ def parse_catalog_products(catalog_urls: list):
         return None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        validated = [r for r in executor.map(validate, raw_products) if r is not None]
+        validated = [r for r in executor.map(validate, raw_products[:80]) if r is not None]
 
     return validated
 
@@ -407,8 +360,8 @@ def parse_catalog_products(catalog_urls: list):
 # -----------------------------
 
 company_input = st.text_input(
-    "Введите название ЛЮБОЙ компании или адрес её сайта:",
-    placeholder="Например: Академия Шоколада, Рубин, Акконд, Лаконд, Баян Сулу, chocolate-academy.ru...",
+    "Введите название кондитерской фабрики, фасовщика или адрес сайта:",
+    placeholder="Например: Спартак, Акконд, Рубин, Академия шоколада, Лаконд, spartak.by...",
 )
 
 if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary", use_container_width=True):
@@ -417,24 +370,20 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
 
     input_text = company_input.strip()
 
-    with st.spinner(f"Универсальный робот ищет сайт для '{input_text}'..."):
-        domain = resolve_domain_universally(input_text)
+    with st.spinner(f"Ищем сайт в сфере сладких подарков и упаковки для '{input_text}'..."):
+        domain = resolve_confectionery_domain(input_text)
 
     if domain:
-        st.success(f"🌐 Официальный сайт найден и подключен: `{domain}`")
-
-        # Находим все каталожные страницы на этом сайте
-        with st.spinner("Сканируем структуру сайта и разделы каталога..."):
-            catalog_urls = discover_catalog_urls(domain)
+        st.success(f"🌐 Официальный сайт кондитерской фабрики/поставщика: `{domain}`")
 
         # ШАГ 1: ПОИСК PDF / EXCEL КАТАЛОГОВ
-        with st.spinner("ШАГ 1: Проверяем наличие PDF/Excel каталогов (без презентаций)..."):
-            documents = scan_for_documents(catalog_urls)
+        with st.spinner("ШАГ 1: Проверяем наличие официальных PDF/Excel каталогов..."):
+            documents = scan_for_documents(domain)
 
         if documents:
             st.markdown("---")
             st.success(f"🎉 **НАЙДЕН ОФИЦИАЛЬНЫЙ КАТАЛОГ (ФАЙЛОВ: {len(documents)})!**")
-            st.info("💡 Найдено прямое скачивание каталогов. Поиск картинок отменен.")
+            st.info("💡 Скачайте полный официальный файл каталога ниже.")
             for doc in documents:
                 icon = "📕 PDF" if ".pdf" in doc["url"].lower() else "📊 EXCEL / DOC"
                 st.markdown(
@@ -448,9 +397,9 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                     unsafe_allow_html=True,
                 )
         else:
-            # ШАГ 2: ВЫГРУЗКА КАРТОЧЕК ТОВАРОВ И УПАКОВКИ СО ВСЕХ СТРАНИЦ КАТАЛОГА
-            with st.spinner("ШАГ 2: Прямых PDF нет. Собираем карточки коробок со всех разделов каталога..."):
-                products = parse_catalog_products(catalog_urls)
+            # ШАГ 2: ВЫГРУЗКА КАРТОЧЕК ТОВАРОВ И УПАКОВКИ
+            with st.spinner("ШАГ 2: Прямых PDF нет. Извлекаем карточки подарков и коробок с сайта..."):
+                products = parse_confectionery_products(domain)
 
             st.markdown("---")
             if products:
@@ -485,9 +434,9 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                         )
                         st.image(prod["bytes"], use_container_width=True)
             else:
-                st.error("На найденных страницах каталога не удалось извлечь товары.")
+                st.error("На сайте в разделе сладких подарков не удалось извлечь карточки товаров.")
     else:
-        st.error("Не удалось автоматически определить сайт. Введите домен компании напрямую (например, chocolate-academy.ru)")
+        st.error("Не удалось найти сайт в сфере кондитерских изделий и подарков. Введите адрес напрямую (например, spartak.by)")
 
 st.divider()
-st.caption(f"Универсальный инструмент коммерческого отдела «Первый Снег». Сезон {TARGET_YEAR}.")
+st.caption(f"Узкоотраслевой инструмент компании «Первый Снег». Сезон {TARGET_YEAR}. Спорт и непрофильный бизнес отфильтрованы.")
