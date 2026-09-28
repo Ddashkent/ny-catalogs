@@ -34,7 +34,6 @@ st.markdown(
     <style>
     .stApp { background-color: #f8fafc; }
     
-    /* Красно-белый логотип Первый Снег */
     .company-logo {
         position: fixed; top: 15px; right: 20px; z-index: 99999;
         background-color: #dc2626; color: #ffffff !important;
@@ -44,7 +43,6 @@ st.markdown(
         letter-spacing: 1px;
     }
     
-    /* Нежный редкий снег */
     @keyframes snowfall {
         0% { transform: translateY(-10px) translateX(0); opacity: 0; }
         20% { opacity: 0.4; }
@@ -76,11 +74,6 @@ st.markdown(
         border-radius: 12px; padding: 12px; margin-bottom: 15px;
         text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.03);
     }
-    .badge-weight {
-        background-color: #dc2626; color: white; font-weight: bold;
-        padding: 3px 10px; font-size: 11px; border-radius: 12px;
-        display: inline-block; margin-top: 4px;
-    }
     .badge-cardboard {
         background-color: #16a34a; color: white; font-weight: bold;
         padding: 3px 8px; font-size: 11px; border-radius: 6px;
@@ -98,96 +91,39 @@ st.markdown(
 
 st.title(f"📦 Анализ Новогодней Упаковки {TARGET_YEAR}")
 st.caption(
-    "Приоритет: Официальные каталоги PDF/Excel. Автоматический сбор карточек коробок без мусора и презентаций."
+    "Приоритет: Официальные каталоги PDF/Excel. Глубокий сбор разделов 'Из картона', 'Из МГК', 'Тубусы' без мусора."
 )
 
 # -----------------------------
-# БАЗА ЗНАНИЙ И ТОЧНЫЕ АДРЕСА
+# БАЗА ЗНАНИЙ
 # -----------------------------
 
 SITE_MAP = {
-    "спартак": "spartak.by",
-    "акконд": "akkond.ru",
     "рубин": "rubin-2000.ru",
+    "акконд": "akkond.ru",
+    "спартак": "spartak.by",
     "академия шоколада": "chocolate-academy.ru",
     "лаконд": "lakond.ru",
     "донко": "donko.su",
-    "тор": "donko.su",
-    "дилявер": "dilaver.ru",
-    "главупак": "glavupak.ru",
-    "дедморозов": "dedmorozov.ru",
-    "коммунарка": "kommunarka.by",
-    "рахат": "rakhat.kz",
-    "баян сулу": "bayansulu.kz",
-    "баянсулу": "bayansulu.kz",
     "рэйд": "podarki-reid21.ru",
-    "рэйд 21": "podarki-reid21.ru",
-    "рейд": "podarki-reid21.ru",
+    "баян сулу": "bayansulu.kz",
     "конфешн": "confashion.ru",
-    "саратовская кф": "confashion.ru",
     "тореро": "torero.ru",
     "славянка": "slavyanka.ru",
     "победа": "pobeda.market",
-    "униконф": "uniconf.ru",
-    "красный октябрь": "uniconf.ru",
-    "рот фронт": "uniconf.ru",
-    "бабаевский": "uniconf.ru",
-    "аленка": "podarki.alenka.ru",
-    "фортуна": "fortuna-podarki.ru",
-    "красный мозырянин": "mozyrconfectionery.by",
 }
 
-# Прямые целевые каталоги подарков
-DIRECT_GIFT_URLS = {
-    "spartak.by": [
-        "https://spartak.by/catalog/novogodnie_podarki/",
-        "https://spartak.by/catalog/",
-    ],
-    "akkond.ru": [
-        "https://akkond.ru/catalog/novyy_god/",
-        "https://akkond.ru/catalog/novogodnie-podarki/",
-    ],
-    "rubin-2000.ru": [
-        "https://rubin-2000.ru/catalog/",
-        "https://rubin-2000.ru/catalog/upakovka/",
-    ],
-    "podarki-reid21.ru": [
-        "https://podarki-reid21.ru/present-category/novogodnie-podarki-2027/podarki-v-kartonnoj-upakovke-novogodnie-podarki-2027/",
-        "https://podarki-reid21.ru/present-category/novogodnie-podarki-2027/podarochnye-nabory-novogodnie-podarki-2027/",
-    ],
-    "chocolate-academy.ru": [
-        "https://chocolate-academy.ru/catalog/novogodnie-podarki/",
-        "https://chocolate-academy.ru/catalog/",
-    ],
-    "lakond.ru": ["https://lakond.ru/products/"],
-}
+# ЮРИДИЧЕСКИЙ БЛОК
+JUNK_DOC_WORDS = ["презентация", "соглашение", "политика", "договор", "оферта", "вакансии", "реквизиты", "cookies"]
+GOOD_DOC_WORDS = ["каталог", "прайс", "подарки", "2026", "2025", "2027", "catalog", "price"]
 
-# БЛОКИРОВКА НОВОСТЕЙ И СЛУЖЕБНЫХ РАЗДЕЛОВ
-FORBIDDEN_URL_PATHS = [
-    "/news", "/novosti", "/press", "/sobytiya", "/media", "/blog", 
-    "/about", "/company", "/o-nas", "/history", "/stati", "/article"
-]
-
-# БЛОКИРОВКА ЮРИДИЧЕСКИХ ФАЙЛОВ И ПРЕЗЕНТАЦИЙ
-DOC_BLACKLIST = [
-    "презентация", "соглашение", "политика", "конфиденциальности", 
-    "договор", "оферта", "вакансии", "реквизиты", "cookies", "устав"
-]
-
-DOC_WHITELIST = ["каталог", "прайс", "price", "catalog", "подарки", "упаковка"]
-
-# СЛУЖЕБНЫЕ ИКОНКИ И БАННЕРЫ
-JUNK_IMAGE_WORDS = [
-    "logo", "icon", "banner", "slider", "bg-", "social", "avatar", "payment", "delivery", "vk"
-]
-
-# ИСКЛЮЧАЕМ ТЕКСТИЛЬ, МЯГКИЕ ИГРУШКИ И КОФРЫ
-TEXTILE_AND_TOY_JUNK = [
-    "текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка", "мешок", "кофр", "пуф"
-]
+# ИСКЛЮЧЕНИЯ ДЛЯ КАРТИНОК
+JUNK_IMAGE_WORDS = ["logo", "icon", "banner", "slider", "bg-", "social", "avatar", "payment", "delivery", "vk"]
+TEXTILE_JUNK = ["текстиль", "мягкая", "игрушка", "плюш", "ткань", "рюкзак", "подушка", "мешок"]
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
 }
 WEIGHT_REGEX = re.compile(r"(\d+(?:[\.,]\d+)?\s*(?:г|гр|грамм|кг|g|kg)\b)", re.IGNORECASE)
 
@@ -198,280 +134,169 @@ WEIGHT_REGEX = re.compile(r"(\d+(?:[\.,]\d+)?\s*(?:г|гр|грамм|кг|g|kg)
 def normalize_domain(value: str) -> str:
     v = value.strip().lower()
     for k, domain in SITE_MAP.items():
-        if k in v:
-            return domain
+        if k in v: return domain
     if "." in v and " " not in v:
         return v.replace("https://", "").replace("http://", "").split("/")[0]
-    return None
+    return "rubin-2000.ru"
 
 def fix_and_encode_url(base_url: str, src: str) -> str:
     src = src.strip()
-    if src.startswith("//"):
-        src = "https:" + src
+    if src.startswith("//"): src = "https:" + src
     full = urllib.parse.urljoin(base_url, src)
     parsed = urllib.parse.urlparse(full)
     safe_path = urllib.parse.quote(parsed.path)
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, parsed.fragment))
 
 def get_html(url: str):
-    # Исправлена проверка путей на новости
-    url_low = url.lower()
-    if any(bad_path in url_low for bad_path in FORBIDDEN_URL_PATHS):
-        return None, None
     try:
-        res = requests.get(url, headers=HEADERS, timeout=8, verify=False)
-        if res.status_code == 200:
-            return res.url, res.text
-    except Exception:
-        pass
+        res = requests.get(url, headers=HEADERS, timeout=10, verify=False, allow_redirects=True)
+        if res.status_code == 200: return res.url, res.text
+    except Exception: pass
     return None, None
 
-def find_target_urls(domain: str) -> list:
-    """Универсально находит ВСЕ страницы новогодних подарков на любом сайте"""
-    base_url = f"https://{domain}"
-    
-    target_urls = []
-    if domain in DIRECT_GIFT_URLS:
-        target_urls.extend(DIRECT_GIFT_URLS[domain])
-    else:
-        target_urls.append(base_url)
-
-    _, html = get_html(base_url)
-    if html:
-        soup = BeautifulSoup(html, "html.parser")
-        for a in soup.find_all("a", href=True):
-            href = a["href"].strip().lower()
-            text = a.get_text(" ", strip=True).lower()
-            if any(kw in href or kw in text for kw in ["новогод", "подар", "нг", "catalog", "podarki", "katalog"]):
-                full_url = fix_and_encode_url(base_url, a["href"])
-                if domain in full_url and full_url not in target_urls:
-                    target_urls.append(full_url)
-                    
-    return target_urls[:8]
-
-# --- ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ И ЮР. МУСОРА) ---
+# --- ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ) ---
 
 def scan_documents(domain: str):
     docs, seen = [], set()
-    urls = find_target_urls(domain)
+    base = f"https://{domain}"
+    urls = [base, f"{base}/catalog/", f"{base}/podarki/"]
+    
+    if domain == "podarki-reid21.ru":
+        urls.insert(0, "https://podarki-reid21.ru/present-category/novogodnie-podarki-2027/podarki-v-kartonnoj-upakovke-novogodnie-podarki-2027/")
 
     for url in urls:
         _, html = get_html(url)
-        if not html:
-            continue
+        if not html: continue
         soup = BeautifulSoup(html, "html.parser")
-
         for a in soup.find_all("a", href=True):
             href = urllib.parse.unquote(a["href"]).lower()
             text = a.get_text().strip().lower()
             full_link = fix_and_encode_url(url, a["href"])
-
             if any(ext in href for ext in [".pdf", ".xlsx", ".xls"]):
                 combined = f"{text} {href}"
-                # 1. ЗАБЛОКИРОВАТЬ ПРЕЗЕНТАЦИИ И СОГЛАШЕНИЯ
-                if any(bad in combined for bad in DOC_BLACKLIST):
-                    continue
-                # 2. ТРЕБОВАТЬ СЛОВА КАТАЛОГ ИЛИ ПРАЙС
-                if any(good in combined for good in DOC_WHITELIST):
+                if any(bad in combined for bad in JUNK_DOC_WORDS): continue
+                if any(good in combined for good in GOOD_DOC_WORDS):
                     if full_link not in seen:
-                        seen.add(full_link)
-                        docs.append({"title": a.get_text().strip() or "Официальный каталог 2026", "url": full_link})
+                        seen.add(full_link); docs.append({"title": a.get_text().strip() or "Официальный каталог", "url": full_link})
     return docs
 
-# --- ШАГ 2: ВЫГРУЗКА ТОЛЬКО ПОДАРКОВ И КОРОБОК ---
+# --- ШАГ 2: ВЫГРУЗКА КАРТОЧЕК ТОВАРОВ (ГЛУБОКИЙ ПОИСК) ---
 
-def download_product_image(img_url: str):
-    """Качает фото подарка и проверяет геометрию (без баннеров)"""
+def download_image_bytes(img_url: str):
+    """Качает фото через сервер Первый Снег (обход блокировок сайта)"""
     try:
         img_url = re.sub(r"/resize_cache/.*?/\d+_\d+_\d+/", "/upload/", img_url)
         img_url = re.sub(r"-\d+x\d+(\.\w+)$", r"\1", img_url)
-
-        res = requests.get(img_url, headers=HEADERS, timeout=6, verify=False)
+        res = requests.get(img_url, headers=HEADERS, timeout=7, verify=False)
         if res.status_code == 200 and len(res.content) > 3000:
             if HAS_PIL:
                 img = Image.open(io.BytesIO(res.content))
                 w, h = img.size
-
-                # Отсекаем мелкие логотипы и системные картинки
-                if w < 130 or h < 130:
-                    return None
-
-                ratio = w / h
-                # Подарочные коробки: пропорции от 0.38 до 1.6 (все баннеры отсекаются)
-                if ratio > 1.65 or ratio < 0.35:
-                    return None
-
-                ext = (img.format or "JPEG").lower().replace("jpeg", "jpg")
-            else:
-                ext = "jpg"
-            return {"bytes": res.content, "ext": ext}
-    except Exception:
-        pass
+                if w < 140 or h < 140: return None
+                if (w / h) > 1.7 or (w / h) < 0.35: return None
+            return res.content
+    except: pass
     return None
 
 def scan_product_boxes(domain: str):
-    urls = find_target_urls(domain)
+    base_url = f"https://{domain}"
+    _, html_main = get_html(base_url)
+    if not html_main: return []
 
+    # 1. Находим ссылки на подкатегории каталога
+    category_pages = [base_url]
+    soup_main = BeautifulSoup(html_main, "html.parser")
+    for a in soup_main.find_all("a", href=True):
+        href = a['href'].lower()
+        text = a.get_text(" ", strip=True).lower()
+        if any(kw in href or kw in text for kw in ["catalog", "produk", "podark", "упаков", "категория"]):
+            full_cat = fix_and_encode_url(base_url, a['href'])
+            if domain in full_cat and not any(bad in full_cat for bad in ["/news", "/about", "/payment"]):
+                if full_cat not in category_pages: category_pages.append(full_cat)
+    
+    if domain == "rubin-2000.ru": category_pages.append("https://rubin-2000.ru/catalog/")
+    
     raw_items = []
     seen_imgs = set()
 
-    for url in urls:
+    def parse_page(url):
+        p_items = []
         _, html = get_html(url)
-        if not html:
-            continue
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Удаляем из поиска новости, статьи, шапку и подвал
-        for junk in soup.find_all(["footer", "header", "nav", "aside"], class_=re.compile(r"news|blog|article|partner|brand|footer|header|slider", re.I)):
-            junk.decompose()
-
-        cards = soup.find_all(
-            lambda t: t.name in ["div", "li", "article", "section"]
-            and t.get("class")
-            and any(
-                c in " ".join(t.get("class")).lower()
-                for c in ["product", "catalog-item", "card", "item", "goods", "element", "b-catalog"]
-            )
-        )
-        if not cards:
-            cards = soup.find_all("img")
+        if not html: return []
+        p_soup = BeautifulSoup(html, "html.parser")
+        for junk in p_soup.find_all(["footer", "header", "nav", "aside"]): junk.decompose()
+        
+        cards = p_soup.find_all(["div", "li", "article"], class_=re.compile(r"product|catalog-item|card|item|goods", re.I))
+        if not cards: cards = p_soup.find_all("img")
 
         for card in cards:
             img = card if card.name == "img" else card.find("img")
-            if not img:
-                continue
-
-            src = (
-                img.get("data-src")
-                or img.get("data-original")
-                or img.get("data-lazy-src")
-                or img.get("src")
-            )
-            if not src:
-                continue
-
-            src_low = src.lower()
-            if any(bad in src_low for bad in JUNK_IMAGE_WORDS):
-                continue
-
-            full_img_url = fix_and_encode_url(url, src)
-
+            if not img: continue
+            src = img.get("data-src") or img.get("data-original") or img.get("data-lazy-src") or img.get("src")
+            if not src or any(bad in src.lower() for bad in JUNK_IMAGE_WORDS): continue
+            
+            full_img = fix_and_encode_url(url, src)
             text = card.get_text(" ", strip=True) if card.name != "img" else ""
-            combined_text = (text + " " + (img.get("alt") or "")).lower()
+            if any(bad in (text + " " + (img.get("alt") or "")).lower() for bad in TEXTILE_JUNK): continue
 
-            # 1. ОТСЕКАЕМ НОВОСТИ И ЮР. МУСОР ПО НАЗВАНИЮ
-            if any(bad in combined_text for bad in DOC_BLACKLIST):
-                continue
+            if full_img not in seen_imgs:
+                seen_imgs.add(full_img)
+                weight = WEIGHT_REGEX.search(text)
+                title = img.get("alt") or img.get("title") or text[:60]
+                raw_items.append({"title": title.strip(), "weight": weight.group(1) if weight else None, "url": full_img})
+        return p_items
 
-            # 2. ОТСЕКАЕМ ТЕКСТИЛЬ, МЯГКИЕ ИГРУШКИ И КОФРЫ
-            if any(bad in combined_text for bad in TEXTILE_AND_TOY_JUNK):
-                continue
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        executor.map(parse_page, category_pages[:10])
 
-            weight_match = WEIGHT_REGEX.search(text)
-            weight = weight_match.group(1) if weight_match else None
-
-            title = img.get("alt") or img.get("title") or text[:60]
-            title = re.sub(r"\s+", " ", title).strip()
-
-            if full_img_url not in seen_imgs and len(title) > 2:
-                seen_imgs.add(full_img_url)
-                raw_items.append({"title": title, "weight": weight, "img_url": full_img_url})
-
-    # Загружаем байты фото в многопоточном режиме
+    # Загружаем байты картинок
     validated = []
     def validate(p):
-        info = download_product_image(p["img_url"])
-        if info:
-            p["bytes"] = info["bytes"]
-            p["ext"] = info["ext"]
-            return p
+        b = download_image_bytes(p["url"])
+        if b:
+            p["bytes"] = b; return p
         return None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-        validated = [r for r in executor.map(validate, raw_items[:80]) if r is not None]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        validated = [r for r in executor.map(validate, raw_items[:100]) if r is not None]
 
     return validated
 
 # -----------------------------
-# ИНТЕРФЕЙС STREAMLIT
+# ИНТЕРФЕЙС
 # -----------------------------
 
-company_input = st.text_input(
-    "Введите название компании или адрес её сайта:",
-    placeholder="Например: Рубин, Акконд, Спартак, Лаконд, Рэйд 21, spartak.by...",
-)
+company_input = st.text_input("Введите название компании или адрес сайта:", placeholder="Рубин, Акконд, Лаконд, rubin-2000.ru...")
 
 if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary", use_container_width=True):
-    if not company_input.strip():
-        st.stop()
-
-    domain = normalize_domain(company_input)
-
-    if domain:
+    if company_input:
+        domain = normalize_domain(company_input)
         st.success(f"🌐 Официальный сайт подключен: `{domain}`")
 
-        # ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ)
-        with st.spinner("ШАГ 1: Проверяем наличие PDF/Excel каталогов..."):
+        with st.spinner("ШАГ 1: Проверяем наличие PDF каталогов..."):
             documents = scan_documents(domain)
 
         if documents:
-            st.markdown("---")
-            st.success(f"🎉 **НАЙДЕН ОФИЦИАЛЬНЫЙ КАТАЛОГ (ФАЙЛОВ: {len(documents)})!**")
-            st.info("💡 Скачайте полный официальный файл каталога ниже.")
+            st.success(f"🎉 НАЙДЕН ОФИЦИАЛЬНЫЙ КАТАЛОГ!")
             for doc in documents:
-                icon = "📕 PDF" if ".pdf" in doc["url"].lower() else "📊 EXCEL / DOC"
-                st.markdown(
-                    f"""
-                    <div class="doc-card">
-                        <h4 style="margin:0; color:#1e293b;">{icon} | {doc['title']}</h4>
-                        <small style="color:gray;">Ссылка: {doc['url']}</small><br>
-                        <a href="{doc['url']}" target="_blank" class="btn-doc">📥 СКАЧАТЬ ОФИЦИАЛЬНЫЙ ФАЙЛ</a>
-                    </div>
-                """,
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"""<div class="doc-card"><b>📄 {doc['title']}</b><br><a href="{doc['url']}" target="_blank" class="btn-doc">📥 СКАЧАТЬ ФАЙЛ</a></div>""", unsafe_allow_html=True)
         else:
-            # ШАГ 2: ИЗВЛЕЧЕНИЕ ТОЛЬКО НОВОГОДНИХ ПОДАРКОВ
-            with st.spinner("ШАГ 2: Извлекаем фотографии подарков и коробок из каталога..."):
+            with st.spinner("ШАГ 2: Извлекаем карточки коробок со всех разделов сайта..."):
                 products = scan_product_boxes(domain)
 
-            st.markdown("---")
             if products:
-                st.success(f"Найдено новогодних подарков и коробок: **{len(products)} шт.**")
-
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for i, prod in enumerate(products, start=1):
-                        safe_name = re.sub(r"[^\w\s-]", "", prod["title"])[:30]
-                        zf.writestr(f"gift_{i:02d}_{safe_name}.{prod['ext']}", prod["bytes"])
-
-                st.download_button(
-                    f"📦 СКАЧАТЬ ВСЕ {len(products)} ПОДАРКОВ В ZIP-АРХИВЕ",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"{domain}_gifts_catalog.zip",
-                    mime="application/zip",
-                )
+                st.success(f"Найдено коробок и подарков: **{len(products)} шт.**")
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, "w") as zf:
+                    for i, prod in enumerate(products):
+                        zf.writestr(f"box_{i+1:02d}.jpg", prod["bytes"])
+                st.download_button("📥 СКАЧАТЬ ВСЕ В ZIP", zip_buf.getvalue(), f"{domain}_boxes.zip", "application/zip")
 
                 st.markdown("---")
                 cols = st.columns(4)
                 for idx, prod in enumerate(products):
                     with cols[idx % 4]:
-                        st.markdown(
-                            f"""
-                            <div class="product-card">
-                                <div class="product-title">{prod['title']}</div>
-                                <span class="badge-cardboard">📦 НОВОГОДНИЙ ПОДАРОК</span>
-                                {f'<br><span class="badge-weight">⚖️ {prod["weight"]}</span>' if prod["weight"] else ''}
-                            </div>
-                        """,
-                            unsafe_allow_html=True,
-                        )
+                        st.markdown(f"""<div class="product-card"><div class="product-title">{prod['title'][:60]}</div><span class="badge-cardboard">📦 КАРТОН</span><br><b>{prod['weight'] or ""}</b></div>""", unsafe_allow_html=True)
                         st.image(prod["bytes"], use_container_width=True)
             else:
-                st.error("На сайте не удалось выгрузить карточки товаров. Введите домен напрямую (например, spartak.by, rubin-2000.ru, akkond.ru).")
-    else:
-        st.error("Не удалось определить сайт. Введите адрес напрямую (например, spartak.by или rubin-2000.ru)")
-
-st.divider()
-st.caption(f"Инструмент компании «Первый Снег». Сезон {TARGET_YEAR}.")
+                st.error("На сайте не удалось найти карточки товаров. Попробуйте ввести домен напрямую.")
