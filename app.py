@@ -98,11 +98,11 @@ st.markdown(
 
 st.title(f"📦 Анализ Новогодней Упаковки {TARGET_YEAR}")
 st.caption(
-    "Приоритет: Официальные каталоги PDF/Excel. Автоматическое сканирование разделов подарков без мусора и презентаций."
+    "Приоритет: Официальные каталоги PDF/Excel. Автоматический сбор карточек коробок без мусора и презентаций."
 )
 
 # -----------------------------
-# БАЗА ЗНАНИЙ СAЙТОВ
+# БАЗА ЗНАНИЙ И ТОЧНЫЕ АДРЕСА
 # -----------------------------
 
 SITE_MAP = {
@@ -119,14 +119,56 @@ SITE_MAP = {
     "коммунарка": "kommunarka.by",
     "рахат": "rakhat.kz",
     "баян сулу": "bayansulu.kz",
+    "баянсулу": "bayansulu.kz",
     "рэйд": "podarki-reid21.ru",
     "рэйд 21": "podarki-reid21.ru",
+    "рейд": "podarki-reid21.ru",
     "конфешн": "confashion.ru",
+    "саратовская кф": "confashion.ru",
     "тореро": "torero.ru",
     "славянка": "slavyanka.ru",
+    "победа": "pobeda.market",
+    "униконф": "uniconf.ru",
+    "красный октябрь": "uniconf.ru",
+    "рот фронт": "uniconf.ru",
+    "бабаевский": "uniconf.ru",
+    "аленка": "podarki.alenka.ru",
+    "фортуна": "fortuna-podarki.ru",
+    "красный мозырянин": "mozyrconfectionery.by",
 }
 
-# ЖЕСТКИЙ ЧЕРНЫЙ СПИСОК ФАЙЛОВ (Презентации, Соглашения, Новости)
+# Прямые целевые каталоги подарков
+DIRECT_GIFT_URLS = {
+    "spartak.by": [
+        "https://spartak.by/catalog/novogodnie_podarki/",
+        "https://spartak.by/catalog/",
+    ],
+    "akkond.ru": [
+        "https://akkond.ru/catalog/novyy_god/",
+        "https://akkond.ru/catalog/novogodnie-podarki/",
+    ],
+    "rubin-2000.ru": [
+        "https://rubin-2000.ru/catalog/",
+        "https://rubin-2000.ru/catalog/upakovka/",
+    ],
+    "podarki-reid21.ru": [
+        "https://podarki-reid21.ru/present-category/novogodnie-podarki-2027/podarki-v-kartonnoj-upakovke-novogodnie-podarki-2027/",
+        "https://podarki-reid21.ru/present-category/novogodnie-podarki-2027/podarochnye-nabory-novogodnie-podarki-2027/",
+    ],
+    "chocolate-academy.ru": [
+        "https://chocolate-academy.ru/catalog/novogodnie-podarki/",
+        "https://chocolate-academy.ru/catalog/",
+    ],
+    "lakond.ru": ["https://lakond.ru/products/"],
+}
+
+# БЛОКИРОВКА НОВОСТЕЙ И СЛУЖЕБНЫХ РАЗДЕЛОВ
+FORBIDDEN_URL_PATHS = [
+    "/news", "/novosti", "/press", "/sobytiya", "/media", "/blog", 
+    "/about", "/company", "/o-nas", "/history", "/stati", "/article"
+]
+
+# БЛОКИРОВКА ЮРИДИЧЕСКИХ ФАЙЛОВ И ПРЕЗЕНТАЦИЙ
 DOC_BLACKLIST = [
     "презентация", "соглашение", "политика", "конфиденциальности", 
     "договор", "оферта", "вакансии", "реквизиты", "cookies", "устав"
@@ -172,7 +214,9 @@ def fix_and_encode_url(base_url: str, src: str) -> str:
     return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, parsed.fragment))
 
 def get_html(url: str):
-    if any(bad_path in url.lower() for bad in ["/news", "/novosti", "/press", "/blog", "/about"]):
+    # Исправлена проверка путей на новости
+    url_low = url.lower()
+    if any(bad_path in url_low for bad_path in FORBIDDEN_URL_PATHS):
         return None, None
     try:
         res = requests.get(url, headers=HEADERS, timeout=8, verify=False)
@@ -186,39 +230,23 @@ def find_target_urls(domain: str) -> list:
     """Универсально находит ВСЕ страницы новогодних подарков на любом сайте"""
     base_url = f"https://{domain}"
     
-    # Резервные варианты написания новогодних разделов для разных CMS
-    possible_paths = [
-        "/catalog/novogodnie_podarki/",
-        "/catalog/novogodnie-podarki/",
-        "/catalog/novyy_god/",
-        "/catalog/novyy-god/",
-        "/catalog/podarki/",
-        "/catalog/upakovka/",
-        "/catalog/",
-        "/products/",
-        "/present-category/novogodnie-podarki-2027/podarki-v-kartonnoj-upakovke-novogodnie-podarki-2027/"
-    ]
-    
-    target_urls = [base_url]
-    
-    # 1. Сканируем главную страницу на предмет ссылок на НГ
+    target_urls = []
+    if domain in DIRECT_GIFT_URLS:
+        target_urls.extend(DIRECT_GIFT_URLS[domain])
+    else:
+        target_urls.append(base_url)
+
     _, html = get_html(base_url)
     if html:
         soup = BeautifulSoup(html, "html.parser")
         for a in soup.find_all("a", href=True):
             href = a["href"].strip().lower()
             text = a.get_text(" ", strip=True).lower()
-            if any(kw in href or kw in text for kw in ["новогод", "подар", "нг", "catalog", "podarki"]):
+            if any(kw in href or kw in text for kw in ["новогод", "подар", "нг", "catalog", "podarki", "katalog"]):
                 full_url = fix_and_encode_url(base_url, a["href"])
                 if domain in full_url and full_url not in target_urls:
                     target_urls.append(full_url)
                     
-    # 2. Добавляем возможные прямые пути
-    for p in possible_paths:
-        test_url = f"{base_url}{p}"
-        if test_url not in target_urls:
-            target_urls.append(test_url)
-            
     return target_urls[:8]
 
 # --- ШАГ 1: ПОИСК PDF КАТАЛОГОВ (БЕЗ ПРЕЗЕНТАЦИЙ И ЮР. МУСОРА) ---
@@ -371,7 +399,7 @@ def scan_product_boxes(domain: str):
 
 company_input = st.text_input(
     "Введите название компании или адрес её сайта:",
-    placeholder="Например: Спартак, Рубин, Акконд, Лаконд, Рэйд 21, spartak.by...",
+    placeholder="Например: Рубин, Акконд, Спартак, Лаконд, Рэйд 21, spartak.by...",
 )
 
 if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary", use_container_width=True):
@@ -441,7 +469,7 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                         )
                         st.image(prod["bytes"], use_container_width=True)
             else:
-                st.error("На сайте не удалось выгрузить карточки товаров. Введите домен напрямую (например, spartak.by или rubin-2000.ru).")
+                st.error("На сайте не удалось выгрузить карточки товаров. Введите домен напрямую (например, spartak.by, rubin-2000.ru, akkond.ru).")
     else:
         st.error("Не удалось определить сайт. Введите адрес напрямую (например, spartak.by или rubin-2000.ru)")
 
