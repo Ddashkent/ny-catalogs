@@ -4,13 +4,14 @@ import io
 import re
 import urllib.parse
 import zipfile
+import urllib3
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 from PIL import Image
 
-# Отключаем предупреждения SSL
-requests.packages.urllib3.disable_warnings()
+# Безопасное отключение предупреждений SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # -----------------------------
 # НАСТРОЙКИ ИНТЕРФЕЙСА "ПЕРВЫЙ СНЕГ"
@@ -24,6 +25,7 @@ st.set_page_config(
 
 TARGET_YEAR = 2026
 
+# Красно-белый логотип + Нежный медленный снег
 st.markdown(
     """
     <style>
@@ -92,10 +94,10 @@ st.markdown(
 )
 
 st.title(f"📦 Анализ Новогодней Упаковки {TARGET_YEAR}")
-st.caption("Приоритет: Поиск официальных PDF/Excel каталогов. Извлечение коробок без презентаций, новостей и юр. мусора.")
+st.caption("Приоритет: Официальные каталоги PDF/Excel. Автоматический сбор коробок без презентаций, новостей и юр. мусора.")
 
 # -----------------------------
-# БАЗА ЗНАНИЙ И ТОЧНЫЕ АДРЕСА
+# КАРТА САЙТОВ И ТОЧНЫЕ АДРЕСА
 # -----------------------------
 
 SITE_MAP = {
@@ -160,11 +162,11 @@ DIRECT_GIFT_URLS = {
     "lakond.ru": ["https://lakond.ru/products/"],
 }
 
-# ЖЕСТКАЯ БЛОКИРОВКА ПРЕЗЕНТАЦИЙ И ЮРИДИЧЕСКОГО МУСОРА
+# ЖЕСТКАЯ БЛОКИРОВКА ПРЕЗЕНТАЦИЙ И ЮРИДИЧЕСКОГО МУСОРА (Сстемминг)
 DOC_BLACKLIST = [
-    "презентация", "презентац", "соглашение", "соглашени", "согласи", 
-    "политика", "политик", "конфиденциальн", "персональн", "обработк", 
-    "договор", "оферта", "вакансии", "реквизиты", "cookies", "устав", "паспорт", "сертификат"
+    "презентац", "соглашени", "согласи", "политик", "конфиденциальн", 
+    "персональн", "обработк", "договор", "оферт", "ваканси", "реквизит", 
+    "cookies", "устав", "паспорт", "сертификат", "privacy", "agreement", "policy"
 ]
 
 DOC_WHITELIST = ["каталог", "прайс", "price", "catalog", "подарки", "упаковка"]
@@ -222,12 +224,12 @@ def get_html(url: str):
     return None, None
 
 def find_domain_dynamic(company_name: str) -> str:
+    """Безопасный поиск сайта без применения сторонних бибилотек"""
     q_low = company_name.lower().strip()
     dom = normalize_domain(q_low)
     if dom:
         return dom
 
-    # Безопасный динамический запрос через стандартный requests (без внешних библиотек)
     try:
         query_enc = urllib.parse.quote(f'"{company_name}" кондитерская фабрика подарки упаковка официальный сайт')
         resp = requests.post("https://html.duckduckgo.com/html/", data={"q": query_enc}, headers=HEADERS, timeout=6)
@@ -262,7 +264,7 @@ def scan_documents(domain: str):
             
             if any(kw in href or kw in text for kw in ["catalog", "katalog", "download", "skachat", "podarki", "novogod"]):
                 full_p = fix_and_encode_url(base_url, a["href"])
-                if domain in full_p and full_p not in urls_to_scan and len(urls_to_scan) < 10:
+                if domain in full_p and full_p not in urls_to_scan and len(urls_to_scan) < 8:
                     urls_to_scan.append(full_p)
 
     def fetch_page_docs(page_url):
@@ -281,8 +283,8 @@ def scan_documents(domain: str):
             if any(ext in href for ext in [".pdf", ".xlsx", ".xls"]):
                 combined = f"{text} {title_attr} {href}".lower()
 
-                # БЛОКИРУЕМ ПРЕЗЕНТАЦИИ И ЮРИДИЧЕСКИЙ МУСОР
-                if any(bad in combined for bad in DOC_BLACKLIST):
+                # БЛОКИРУЕМ ПРЕЗЕНТАЦИИ И СОГЛАШЕНИЯ ПО КОРНЯМ СЛОВ
+                if any(bad in combined for bad in DOC_BLACKLIST_STEMS):
                     continue
 
                 doc_title = text or title_attr or a.parent.get_text().strip() or href.split("/")[-1]
@@ -293,7 +295,7 @@ def scan_documents(domain: str):
                 p_docs.append({"title": doc_title or "Официальный каталог 2026", "url": full_link})
         return p_docs
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         for res in executor.map(fetch_page_docs, urls_to_scan):
             for d in res:
                 if d["url"] not in seen:
@@ -315,6 +317,7 @@ def download_product_image(img_url: str):
             img = Image.open(io.BytesIO(res.content))
             w, h = img.size
 
+            # Отсекаем иконки
             if w < 120 or h < 120:
                 return None
 
@@ -384,7 +387,9 @@ def scan_product_boxes(domain: str):
             combined_text = (text + " " + (img.get("alt") or "")).lower()
 
             # Отсекаем юр. мусор, текстиль и мягкие игрушки
-            if any(bad in combined_text for bad in FACTORY_LOGOS_AND_JUNK + DOC_BLACKLIST + TEXTILE_AND_TOY_JUNK):
+            if any(bad in combined_text for bad in DOC_BLACKLIST_STEMS):
+                continue
+            if any(bad in combined_text for bad in TEXTILE_AND_TOY_JUNK):
                 continue
 
             weight_match = WEIGHT_REGEX.search(text)
@@ -406,7 +411,7 @@ def scan_product_boxes(domain: str):
             return p
         return None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         validated = [r for r in executor.map(validate, raw_items[:80]) if r is not None]
 
     return validated
@@ -487,9 +492,9 @@ if st.button("🚀 НАЙТИ КАТАЛОГ И УПАКОВКУ", type="primary
                         )
                         st.image(prod["bytes"], use_container_width=True)
             else:
-                st.error("На сайте не удалось найти карточки товаров. Введите адрес напрямую (например, spartak.by или rubin-2000.ru)")
+                st.error("На сайте не удалось найти карточки товаров. Введите адрес напрямую (например, spartak.by, rubin-2000.ru, akkond.ru)")
     else:
-        st.error("Не удалось определить сайт. Введите адрес напрямую (например, spartak.by или rubin-2000.ru)")
+        st.error("Не удалось определить сайт. Введите адрес напрямую (например, spartak.by, rubin-2000.ru, akkond.ru)")
 
 st.divider()
 st.caption(f"Инструмент компании «Первый Снег». Сезон {TARGET_YEAR}.")
