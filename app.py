@@ -19,7 +19,6 @@ CARDBOARD_WORDS = [
     'коробка', 'box', 'футляр', 'шкатулка', 'сундучок', 'домик', 'книга'
 ]
 
-# ИСКЛЮЧАЕМ (Жесть, Текстиль, Дерево, Пластик)
 FOREIGN_MATERIALS = [
     'жест', 'zhest', 'металл', 'tin', 'банка', 'текстил', 'ткан', 'мешоч', 
     'рюкзак', 'плюш', 'мягк', 'игрушк', 'toy', 'дерев', 'фанер', 'wood',
@@ -31,45 +30,56 @@ UI_JUNK = ['logo', 'icon', 'banner', 'button', 'social', 'vk', 'fb', 'instagram'
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
 
 # =========================================================
-# 🧠 УМНЫЙ ПОИСК САЙТА (БЕЗ ВНЕШНИХ БИБЛИОТЕК)
+# 🧠 ИСПРАВЛЕННАЯ ТРАНСЛИТЕРАЦИЯ
 # =========================================================
 
 def translit(text):
-    """Транслитерация для поиска доменов"""
-    symbols = str.maketrans(
-        "абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
-        "abvgdeezzijklmnoprstufhcchshsh_y_eua"
-    )
-    return text.lower().translate(symbols).replace(" ", "-")
+    """Надежная транслитерация для генерации доменов"""
+    chars = {
+        'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e',
+        'ж':'zh','з':'z','и':'i','й':'y','к':'k','л':'l','м':'m',
+        'н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u',
+        'ф':'f','х':'h','ц':'c','ч':'ch','ш':'sh','щ':'shch',
+        'ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya'
+    }
+    res = ""
+    for c in text.lower():
+        if c in chars:
+            res += chars[c]
+        elif c.isalnum():
+            res += c
+        elif c.isspace():
+            res += "-"
+    return res
 
 def resolve_site(query):
-    """Находит сайт компании по названию без поисковиков (чтобы не банили)"""
+    """Находит сайт компании по названию"""
     q = query.lower().strip()
-    
-    # 1. Если это уже ссылка
     if '.' in q and ' ' not in q:
         return [q if q.startswith('http') else f"https://{q}"]
     
-    # 2. Прямой подбор доменов ЕАЭС
     name = translit(q)
+    # Популярные комбинации доменов для производителей ЕАЭС
     variants = [
-        f"https://{name}.ru", f"https://{name}.by", f"https://{name}.kz",
-        f"https://{name}-tg.ru", f"https://{name}-2000.ru", f"https://{name}-gifts.ru"
+        f"https://{name}.by", f"https://{name}.ru", f"https://{name}.kz",
+        f"https://{name}-tg.ru", f"https://{name}-2000.ru", f"https://{name}-gifts.ru",
+        f"https://td-{name}.ru", f"https://{name}-upak.ru"
     ]
     
     verified = []
     for v in variants:
         try:
-            r = requests.head(v, headers=HEADERS, timeout=3, verify=False, allow_redirects=True)
+            # Проверяем только заголовок для скорости
+            r = requests.head(v, headers=HEADERS, timeout=2.5, verify=False, allow_redirects=True)
             if r.status_code < 400:
                 verified.append(r.url)
         except: continue
     
-    # Если ничего не нашли, пробуем вернуть хотя бы первый вариант .ru
+    # Если автоподбор не сработал, вернем хотя бы базовый вариант для попытки парсинга
     return verified if verified else [f"https://{name}.ru"]
 
 # =========================================================
-# 🕷 ГЛУБОКИЙ СКАНЕР
+# 🕷 СКАНЕР
 # =========================================================
 
 def is_cardboard_item(text):
@@ -94,14 +104,14 @@ def parse_page(url, domain):
     
     # Images (Lazy Load)
     for img in soup.find_all('img'):
-        src = img.get('src') or img.get('data-src') or img.get('data-original')
+        src = img.get('src') or img.get('data-src') or img.get('data-original') or img.get('data-lazy-src')
         if not src: continue
         full = urljoin(url, src)
         low = full.lower()
         if any(j in low for j in UI_JUNK) or not any(ex in low for ex in ['.jpg', '.jpeg', '.png', '.webp']):
             continue
         
-        alt = (img.get('alt') or '').strip()
+        alt = (img.get('alt') or img.get('title') or '').strip()
         if is_cardboard_item(alt + full + url):
             imgs.append({'name': alt or "Картонная упаковка", 'url': quote(full, safe=':/?&=#')})
             
@@ -114,7 +124,6 @@ def deep_scan(start_url):
         soup = BeautifulSoup(r.text, 'html.parser')
     except: return [], []
 
-    # Находим подразделы
     pages = {start_url}
     for a in soup.find_all('a', href=True):
         href = urljoin(start_url, a['href']).split('#')[0]
@@ -124,8 +133,9 @@ def deep_scan(start_url):
                 pages.add(href)
 
     all_p, all_i = [], []
+    # Увеличиваем количество потоков для полноты анализа
     with ThreadPoolExecutor(max_workers=10) as ex:
-        futures = [ex.submit(parse_page, u, domain) for u in list(pages)[:30]]
+        futures = [ex.submit(parse_page, u, domain) for u in list(pages)[:35]]
         for f in as_completed(futures):
             p, i = f.result()
             all_p.extend(p)
@@ -141,7 +151,7 @@ def deep_scan(start_url):
 st.set_page_config(page_title="Картонный Поиск", layout="wide", page_icon="📦")
 st.title("📦 Поиск новогодней упаковки (Картон / МГК / Тубы)")
 
-query = st.text_input("Введите название компании (напр. Рубин, Спартак, Академия):")
+query = st.text_input("Введите название компании (напр. Коммунарка, Рубин, Академия):")
 
 if query:
     with st.spinner("🚀 Глубокий поиск по картонным разделам..."):
@@ -160,21 +170,27 @@ if query:
         
         with c1:
             st.subheader(f"📄 PDF ({len(pdfs)})")
-            for p in pdfs: st.markdown(f"📎 **[{p['name']}]({p['url']})**")
+            if pdfs:
+                for p in pdfs: st.markdown(f"📎 **[{p['name']}]({p['url']})**")
+            else: st.info("PDF не найдены.")
             
         with c2:
             st.subheader(f"📦 Фото картона ({len(imgs)})")
             if imgs:
                 zip_io = io.BytesIO()
                 with zipfile.ZipFile(zip_io, 'w') as zf:
-                    for idx, im in enumerate(imgs[:300]):
+                    for idx, im in enumerate(imgs[:400]): # Увеличили лимит фото
                         try:
                             res = requests.get(im['url'], timeout=5, verify=False).content
-                            zf.writestr(f"{idx+1:03d}_{im['name'][:30]}.jpg", res)
+                            # Очистка имени для ZIP
+                            clean_name = "".join([c for c in im['name'] if c.isalnum() or c in (' ', '_')]).strip()
+                            zf.writestr(f"{idx+1:03d}_{clean_name[:40]}.jpg", res)
                         except: continue
                 st.download_button(f"📥 СКАЧАТЬ ZIP ({len(imgs)} шт.)", zip_io.getvalue(), "karton.zip")
                 
                 grid = st.columns(3)
-                for i, im in enumerate(imgs[:9]): grid[i%3].image(im['url'], use_container_width=True)
+                for i, im in enumerate(imgs[:12]): grid[i%3].image(im['url'], use_container_width=True)
+            else:
+                st.info("Картонной упаковки не найдено.")
     else:
-        st.error("❌ Ничего не найдено. Попробуйте уточнить название.")
+        st.error("❌ Ничего не найдено. Попробуйте уточнить название компании.")
