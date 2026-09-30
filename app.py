@@ -2,13 +2,18 @@ import io
 import re
 import zipfile
 from urllib.parse import urljoin, urlparse, quote
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from bs4 import BeautifulSoup
 import streamlit as st
+import urllib3
 from duckduckgo_search import DDGS
 
+# Отключаем предупреждения о SSL-сертификатах
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # =========================================================
-# 🎯 ГЛОБАЛЬНЫЙ РЕЕСТР ПОДАРОЧНИКОВ (ДЛЯ МГНОВЕННОГО ПОИСКА)
+# 🎯 БАЗА И ИСКЛЮЧЕНИЯ
 # =========================================================
 EXPERT_DB = {
     'рубин': ['https://rubin-2000.ru', 'https://rubin-tg.ru', 'https://rubin-grodno.by'],
@@ -21,146 +26,215 @@ EXPERT_DB = {
     'москондитер': ['https://mosconditer.ru'],
     'акконд': ['https://akkond.ru'],
     'славянка': ['https://slavyanka.ru'],
-    'красный октябрь': ['https://www.uniconf.ru'],
-    'рот фронт': 'https://www.uniconf.ru',
-    'бабаевский': 'https://www.uniconf.ru',
-    'эссен': 'https://essenproduction.com',
-    'победа': 'https://store.pobedavkusa.ru',
-    'сириус': 'https://sirius-gk.ru',
-    'марс': 'https://mars-podarki.ru',
-    'белкондитер': 'https://belkonditer.by',
 }
 
-# Ключевые слова для фильтрации тематики
-GIFT_KEYWORDS = ['подар', 'упаков', 'конфет', 'сладк', 'жесть', 'картон', 'туба', 'каталог', '2025', '2027', 'gift', 'box']
-METAL_KEYWORDS = ['металл', 'прокат', 'сталь', 'арматура', 'трубы', 'бетон', 'швеллер']
+# Строгий черный список для отсечения мусора интерфейса
+UI_JUNK = [
+    'logo', 'icon', 'banner', 'button', 'btn', 'social', 'vk', 'fb', 'instagram',
+    'telegram', 'cart', 'avatar', 'payment', 'header', 'footer', 'pixel', 'mastercard',
+    'visa', 'mir', 'arrow', 'bg', 'background', 'slider', 'widget', 'rating', 'share',
+    'captcha', 'counter', 'yametrika', 'google'
+]
 
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+PDF_JUNK = ['политика', 'обработк', 'персональн', 'лицензия', 'устав', 'согласие', 'sout', 'privacy', 'terms']
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+}
 
 # =========================================================
-# 🧠 МОЗГ ПОИСКА (SMART SEARCH)
+# 🧠 ПОИСК И АНАЛИЗ
 # =========================================================
+
+def fix_url(url):
+    return quote(url, safe=':/?&=#')
 
 def find_official_site(company_name):
-    """Ищет сайт, игнорируя металл и выбирая подарки"""
     q = company_name.lower().strip()
-    
-    # 1. Сначала смотрим в наш проверенный список
     for key, urls in EXPERT_DB.items():
         if key in q:
             return urls if isinstance(urls, list) else [urls]
 
-    # 2. Если нет в базе - идем в интернет с умным запросом
     try:
         with DDGS() as ddgs:
-            # Добавляем уточнение, чтобы не вылез металл
             search_query = f"{q} новогодние подарки упаковка официальный сайт каталог"
             results = list(ddgs.text(search_query, max_results=5))
-            
             valid_urls = []
             for r in results:
                 url = r['href']
-                # Отсекаем мусорные площадки (википедия, вк, авито)
-                if not any(bad in url for bad in ['wikipedia', 'vk.com', 'avito', 'youtube', 'facebook', 'instagram']):
+                if not any(bad in url for bad in ['wikipedia', 'vk.com', 'avito', 'youtube', 'facebook']):
                     valid_urls.append(url)
             return valid_urls
     except:
-        # Если поиск заблокирован - пробуем прямой транслит
         return [f"https://{q.replace(' ', '-')}.ru"]
 
-def verify_and_scan(url):
-    """Проверяет сайт на тему подарков и собирает данные"""
+def fetch_page_soup(url):
     try:
         r = requests.get(url, headers=HEADERS, timeout=10, verify=False)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        text = (soup.title.string if soup.title else "") + soup.get_text()
-        text = text.lower()
-        
-        # Защита от металла
-        if any(w in text for w in METAL_KEYWORDS) and not any(w in text for w in GIFT_KEYWORDS):
-            return None, None, False
-            
-        domain = urlparse(url).netloc
-        sections = {url}
-        for a in soup.find_all('a', href=True):
-            link = urljoin(url, a['href'])
-            if urlparse(link).netloc == domain:
-                if any(w in a.get_text().lower() or w in link.lower() for w in ['catalog', 'katalog', 'podarki', 'novogod', '202']):
-                    sections.add(link)
-        
-        pdfs, imgs = [], []
-        for page in list(sections)[:8]:
-            try:
-                pr = requests.get(page, headers=HEADERS, timeout=8, verify=False)
-                ps = BeautifulSoup(pr.text, 'html.parser')
-                # PDF
-                for a in ps.find_all('a', href=True):
-                    h = urljoin(page, a['href'])
-                    t = a.get_text().strip()
-                    if h.lower().split('?')[0].endswith('.pdf'):
-                        if any(w in (t+h).lower() for w in GIFT_KEYWORDS):
-                            pdfs.append({'name': t or "Каталог PDF", 'url': quote(h, safe=':/?&=#')})
-                # Images
-                for im in ps.find_all('img', src=True):
-                    s = urljoin(page, im['src'])
-                    alt = im.get('alt', '').strip()
-                    if any(w in (alt+s).lower() for w in GIFT_KEYWORDS):
-                        if not any(b in s.lower() for b in ['logo', 'icon', 'btn', 'social']):
-                            imgs.append({'name': alt or "Упаковка", 'url': quote(s, safe=':/?&=#')})
-            except: continue
-            
-        return list({v['url']:v for v in pdfs}.values()), list({v['url']:v for v in imgs}.values()), True
+        r.raise_for_status()
+        return BeautifulSoup(r.text, 'html.parser')
     except:
-        return None, None, False
+        return None
 
 # =========================================================
-# 🖥 ИНТЕРФЕЙС МЕНЕДЖЕРА
+# 🕷 ГЛУБОКИЙ МНОГОПОТОЧНЫЙ КРАУЛЕР (DEEP SCAN)
 # =========================================================
 
-st.set_page_config(page_title="AI Поиск подарков ЕАЭС", layout="wide")
+def parse_single_page(page_url, base_domain):
+    """Сканирует одну конкретную страницу на PDF и изображения товаров"""
+    soup = fetch_page_soup(page_url)
+    if not soup:
+        return [], [], []
 
-st.title("🎁 Профессиональный поиск новогодних каталогов")
-st.write("Менеджеру: введите только название (напр. **Рубин**, **Спартак**, **Микс-Ко**). Система сама найдет сайт и каталоги 2025-2027.")
+    page_pdfs = []
+    page_imgs = []
+    found_links = []
 
-query = st.text_input("Название компании:")
+    # 1. Поиск внутренних ссылок для дальнейшего углубления
+    for a in soup.find_all('a', href=True):
+        href = urljoin(page_url, a['href'])
+        if urlparse(href).netloc == base_domain:
+            # Чистим от якорей и параметров фильтрации
+            clean_href = href.split('#')[0]
+            found_links.append(clean_href)
+
+            # Проверка на PDF
+            if clean_href.lower().rsplit('?', 1)[0].endswith('.pdf'):
+                title = a.get_text().strip() or clean_href.split('/')[-1]
+                if not any(j in (title + clean_href).lower() for j in PDF_JUNK):
+                    page_pdfs.append({'name': title, 'url': fix_url(clean_href)})
+
+    # 2. Поиск изображений (учитываем Lazy-Load: data-src, data-original)
+    for img in soup.find_all('img'):
+        src = img.get('src') or img.get('data-src') or img.get('data-original') or img.get('data-lazy-src')
+        if not src:
+            continue
+
+        full_img_url = urljoin(page_url, src)
+        img_lower = full_img_url.lower()
+
+        # Отсекаем интерфейсный мусор
+        if any(junk in img_lower for junk in UI_JUNK) or img_lower.endswith('.svg'):
+            continue
+
+        # Проверяем расширения изображений
+        if any(ext in img_lower for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+            alt = img.get('alt', '').strip() or img.get('title', '').strip()
+            name = alt if alt else full_img_url.split('/')[-1].split('?')[0]
+            page_imgs.append({'name': name, 'url': fix_url(full_img_url)})
+
+    return page_pdfs, page_imgs, found_links
+
+
+def deep_full_website_scan(start_url):
+    """Полный многопоточный анализ всех разделов каталога"""
+    base_domain = urlparse(start_url).netloc
+    first_soup = fetch_page_soup(start_url)
+    if not first_soup:
+        return None, None
+
+    # Собираем стартовый пул страниц категории и каталога
+    catalog_urls = {start_url}
+    for a in first_soup.find_all('a', href=True):
+        href = urljoin(start_url, a['href'])
+        if urlparse(href).netloc == base_domain:
+            href_clean = href.split('#')[0]
+            href_lower = href_clean.lower()
+            # Фильтруем ссылки на категории каталога
+            if any(k in href_lower for k in ['catalog', 'katalog', 'product', 'category', 'upakovka', 'podarki', 'korobki', 'zhest', 'karton', 'derevo', 'tekstil', '202']):
+                catalog_urls.add(href_clean)
+
+    # Ограничиваем список страниц до 35 самых важных разделов для высокой скорости
+    urls_to_scan = list(catalog_urls)[:35]
+
+    all_pdfs = []
+    all_imgs = []
+
+    # Многопоточный запуск сканирования
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_url = {executor.submit(parse_single_page, url, base_domain): url for url in urls_to_scan}
+        for future in as_completed(future_to_url):
+            try:
+                pdfs, imgs, _ = future.result()
+                all_pdfs.extend(pdfs)
+                all_imgs.extend(imgs)
+            except Exception:
+                continue
+
+    # Уникализация результатов по URL
+    unique_pdfs = list({v['url']: v for v in all_pdfs}.values())
+    unique_imgs = list({v['url']: v for v in all_imgs}.values())
+
+    return unique_pdfs, unique_imgs
+
+# =========================================================
+# 🖥 ИНТЕРФЕЙС STREAMLIT
+# =========================================================
+
+st.set_page_config(page_title="Глубокий поиск каталогов ЕАЭС", layout="wide", page_icon="🎁")
+
+st.title("🎁 Глубокий анализ каталогов и упаковки")
+st.caption("Введите название компании (например: **Рубин**, **Спартак**, **Академия шоколада**). Система за секунды полностью отсканирует все категории каталога.")
+
+query = st.text_input("Название компании:", placeholder="Рубин")
 
 if query:
-    with st.spinner(f"Ищем официальные ресурсы для '{query}'..."):
+    with st.spinner(f"🔎 Ищем и глубоко анализируем каталог для «{query}»..."):
         sites = find_official_site(query)
         
-        found_any = False
-        for site in sites:
-            pdfs, imgs, is_relevant = verify_and_scan(site)
-            
-            if is_relevant:
-                st.success(f"✅ Найден сайт компании: {site}")
-                found_any = True
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.subheader("📄 PDF Каталоги (в т.ч. 2027)")
-                    if pdfs:
-                        for p in pdfs:
-                            st.markdown(f"📎 **[{p['name']}]({p['url']})**")
-                    else: st.info("PDF не найдены.")
-                
-                with c2:
-                    st.subheader("🖼 Упаковка (Фото)")
-                    if imgs:
-                        st.info(f"Найдено изображений: {len(imgs)}")
-                        zip_io = io.BytesIO()
-                        with zipfile.ZipFile(zip_io, 'w') as zf:
-                            for idx, im in enumerate(imgs[:60]):
-                                try:
-                                    res = requests.get(im['url'], timeout=5, verify=False).content
-                                    zf.writestr(f"item_{idx+1}.jpg", res)
-                                except: continue
-                        st.download_button(f"📥 Скачать ZIP ({site})", zip_io.getvalue(), "catalog.zip")
-                        
-                        cols = st.columns(3)
-                        for i, im in enumerate(imgs[:9]):
-                            cols[i%3].image(im['url'], use_container_width=True)
-                break # Останавливаемся на первом качественном сайте
+        target_site = None
+        pdfs, imgs = None, None
         
-        if not found_any:
-            st.error("❌ Не удалось найти сайт компании с новогодней тематикой. Попробуйте уточнить название.")
+        for site in sites:
+            res_pdfs, res_imgs = deep_full_website_scan(site)
+            if res_imgs or res_pdfs:
+                target_site = site
+                pdfs, imgs = res_pdfs, res_imgs
+                break
+
+        if target_site and (pdfs or imgs):
+            st.success(f"✅ Успешно проанализирован сайт: **{target_site}**")
+            
+            c1, c2 = st.columns([1, 1])
+            
+            with c1:
+                st.subheader(f"📄 PDF Каталоги ({len(pdfs)} шт.)")
+                if pdfs:
+                    for p in pdfs:
+                        st.markdown(f"📎 **[{p['name']}]({p['url']})**")
+                else:
+                    st.info("PDF-каталоги на страницах не найдены.")
+
+            with c2:
+                st.subheader(f"🖼 Упаковка и товары ({len(imgs)} шт.)")
+                if imgs:
+                    # Создание полной ZIP выгрузки
+                    zip_io = io.BytesIO()
+                    with zipfile.ZipFile(zip_io, 'w') as zf:
+                        # Скачиваем до 300 фото товаров
+                        for idx, im in enumerate(imgs[:300]):
+                            try:
+                                r = requests.get(im['url'], timeout=4, verify=False).content
+                                ext = 'jpg'
+                                if '.png' in im['url'].lower(): ext = 'png'
+                                elif '.webp' in im['url'].lower(): ext = 'webp'
+                                zf.writestr(f"product_{idx+1}.{ext}", r)
+                            except:
+                                continue
+                    
+                    st.download_button(
+                        label=f"📥 СКАЧАТЬ ВСЕ {len(imgs)} ФОТО В ZIP-АРХИВЕ",
+                        data=zip_io.getvalue(),
+                        file_name=f"full_catalog_{urlparse(target_site).netloc}.zip",
+                        mime="application/zip"
+                    )
+                    
+                    st.write("---")
+                    st.caption("Превью первых карточек из найденных категорий:")
+                    grid = st.columns(4)
+                    for i, im in enumerate(imgs[:12]):
+                        grid[i % 4].image(im['url'], caption=im['name'][:25], use_container_width=True)
+                else:
+                    st.info("Изображения упаковки не найдены.")
+        else:
+            st.error(f"❌ Не удалось извлечь данные с сайта компании «{query}». Попробуйте уточнить название.")
