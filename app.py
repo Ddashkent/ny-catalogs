@@ -1,5 +1,4 @@
 import io
-import re
 import zipfile
 from urllib.parse import urljoin, urlparse, quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,10 +11,10 @@ from duckduckgo_search import DDGS
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =========================================================
-# 🎯 БАЗА КОМПАНИЙ
+# 🎯 РЕЕСТР ПОСТАВЩИКОВ
 # =========================================================
 EXPERT_DB = {
-    'рубин': ['https://rubin-2000.ru', 'https://rubin-tg.ru', 'https://rubin-grodno.by'],
+    'рубин': ['https://rubin-2000.ru', 'https://rubin-tg.ru'],
     'академия шоколада': ['https://chocohunter.ru', 'https://academy-chocolate.ru'],
     'спартак': ['https://spartak.by'],
     'коммунарка': ['https://www.kommunarka.by'],
@@ -28,98 +27,92 @@ EXPERT_DB = {
 }
 
 # =========================================================
-# 📦 СТРОГИЙ ФИЛЬТР МАТЕРИАЛОВ (ТОЛЬКО КАРТОН/МГК/ТУБЫ)
+# 📦 КАРТОННЫЙ СЛОВАРЬ (ТОЛЬКО ЭТО НАМ НУЖНО)
 # =========================================================
-
-# Ключевые слова материалов, которые нам НУЖНЫ
-MATERIAL_KEYWORDS = [
-    'картон',           # картонная упаковка
-    'гофрокартон',
-    'гофро',
-    'микрогофро',
-    'мгк',              # микрогофрокартон - аббревиатура
-    'переплетн',        # переплетный картон
-    'переплётн',
-    'туба',
-    'тубус',
-    'тубы',
-    'короб',            # коробки (обычно картонные)
+CARDBOARD_WORDS = [
+    'картон', 'karton', 'cardboard',
+    'мгк', 'микрогофр', 'гофрокартон', 'гофро', 'gofr', 'mgk',
+    'переплет', 'переплёт', 'perepl', 'кашир', 'kashir',
+    'туб', 'tuba', 'tube', 'тубус',
+    'коробка', 'korobka', 'box', 'футляр', 'шкатулка из картона',
+    'сундучок картон', 'домик картон', 'книга картон',
 ]
 
-# Ключевые слова материалов, которые нужно ИСКЛЮЧИТЬ (другие материалы)
-MATERIAL_EXCLUDE = [
-    'текстил', 'тканев', 'мешоч', 'фетр', 'холщов',
-    'дерев', 'древесин',
-    'металл', 'жест', 'жестян',
-    'пластик', 'полимер', 'пвх',
-    'стекл',
-    'кожа', 'кожан',
+# Материалы, которые НАМ НЕ НУЖНЫ (жёсткий стоп-лист)
+FOREIGN_MATERIALS = [
+    'жест', 'zhest', 'металл', 'tin', 'банка',
+    'текстил', 'tekstil', 'ткан', 'мешоч', 'мешок', 'рюкзак', 'сумка',
+    'плюш', 'мягк', 'игрушк', 'toy',
+    'дерев', 'derev', 'фанер', 'wood',
+    'пластик', 'plastik', 'plastic', 'пэт', 'pvc', 'пвх',
+    'керамик', 'стекл', 'валенк', 'носк', 'варежк',
 ]
 
-# Общая новогодняя/подарочная тематика (должна присутствовать хотя бы частично)
-NY_CONTEXT_KEYWORDS = [
-    'новогод', 'новый год', 'подар', 'каталог', '2025', '2026', '2027', '2028',
-    'gift', 'new year', 'упаков', 'набор', 'праздн',
-]
-
-PDF_JUNK = ['политика', 'обработк', 'персональн', 'лицензия', 'устав', 'согласие', 'sout', 'privacy', 'terms']
-
+# Интерфейсный мусор
 UI_JUNK = [
     'logo', 'icon', 'banner', 'button', 'btn', 'social', 'vk', 'fb', 'instagram',
-    'telegram', 'cart', 'avatar', 'payment', 'header', 'footer', 'pixel', 'mastercard',
-    'visa', 'mir', 'arrow', 'bg', 'background', 'slider', 'widget', 'rating', 'share',
-    'captcha', 'counter', 'yametrika', 'google'
+    'telegram', 'cart', 'avatar', 'payment', 'header', 'footer', 'pixel',
+    'mastercard', 'visa', 'mir', 'arrow', 'bg', 'background', 'slider',
+    'widget', 'rating', 'share', 'captcha', 'counter', 'metrika', 'sprite',
 ]
 
+PDF_JUNK = ['политика', 'обработк', 'персональн', 'лицензия', 'устав',
+            'согласие', 'sout', 'privacy', 'terms', 'реквизит', 'договор', 'оферт']
+
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 }
 
 # =========================================================
-# 🧠 ЛОГИКА ФИЛЬТРАЦИИ
+# 🔍 ЛОГИКА ФИЛЬТРАЦИИ
 # =========================================================
 
 def fix_url(url):
     return quote(url, safe=':/?&=#')
 
-def is_material_match(text):
-    """Проверяет, относится ли текст к нужным материалам (картон/МГК/туба)"""
-    text_l = text.lower()
 
-    # Если явно указан "чужой" материал без упоминания картона/тубы рядом - отклоняем
-    has_excluded = any(bad in text_l for bad in MATERIAL_EXCLUDE)
-    has_wanted = any(good in text_l for good in MATERIAL_KEYWORDS)
-
-    if has_excluded and not has_wanted:
+def is_cardboard(text):
+    """True — если позиция относится к картону/МГК/переплёту/тубам."""
+    t = text.lower()
+    if any(bad in t for bad in FOREIGN_MATERIALS):
         return False
+    return any(good in t for good in CARDBOARD_WORDS)
 
-    return has_wanted
 
-def is_ny_context(text):
-    """Проверяет привязку к новогодней/подарочной тематике"""
-    text_l = text.lower()
-    return any(w in text_l for w in NY_CONTEXT_KEYWORDS)
+def is_cardboard_section(url, anchor_text):
+    """Пускаем краулер только в картонные разделы каталога."""
+    t = (url + ' ' + anchor_text).lower()
+    if any(bad in t for bad in FOREIGN_MATERIALS):
+        return False
+    if any(good in t for good in CARDBOARD_WORDS):
+        return True
+    # Общие разделы каталога пропускаем — внутри отфильтруем по карточкам
+    return any(k in t for k in ['catalog', 'katalog', 'product', 'category', 'upakovka', 'podarki'])
+
+
+# =========================================================
+# 🌐 ПОИСК САЙТА
+# =========================================================
 
 def find_official_site(company_name):
     q = company_name.lower().strip()
     for key, urls in EXPERT_DB.items():
         if key in q:
             return urls if isinstance(urls, list) else [urls]
-
     try:
         with DDGS() as ddgs:
-            search_query = f"{q} новогодняя упаковка картон туба официальный сайт каталог"
-            results = list(ddgs.text(search_query, max_results=5))
-            valid_urls = []
-            for r in results:
-                url = r['href']
-                if not any(bad in url for bad in ['wikipedia', 'vk.com', 'avito', 'youtube', 'facebook']):
-                    valid_urls.append(url)
-            return valid_urls
+            res = list(ddgs.text(
+                f"{q} новогодняя упаковка картон тубы каталог официальный сайт",
+                max_results=5))
+            return [r['href'] for r in res
+                    if not any(b in r['href'] for b in
+                               ['wikipedia', 'vk.com', 'avito', 'youtube', 'facebook'])]
     except Exception:
         return [f"https://{q.replace(' ', '-')}.ru"]
 
-def fetch_page_soup(url):
+
+def fetch_soup(url):
     try:
         r = requests.get(url, headers=HEADERS, timeout=10, verify=False)
         r.raise_for_status()
@@ -127,190 +120,152 @@ def fetch_page_soup(url):
     except Exception:
         return None
 
+
 # =========================================================
-# 🕷 ГЛУБОКИЙ МНОГОПОТОЧНЫЙ КРАУЛЕР С ФИЛЬТРОМ МАТЕРИАЛОВ
+# 🕷 КРАУЛЕР (ТОЛЬКО КАРТОН)
 # =========================================================
 
-def parse_single_page(page_url, base_domain):
-    soup = fetch_page_soup(page_url)
+def parse_page(page_url, base_domain):
+    soup = fetch_soup(page_url)
     if not soup:
         return [], []
 
-    page_pdfs = []
-    page_imgs = []
+    pdfs, imgs = [], []
 
-    # PDF
+    # --- PDF ---
     for a in soup.find_all('a', href=True):
-        href = urljoin(page_url, a['href'])
+        href = urljoin(page_url, a['href']).split('#')[0]
         if urlparse(href).netloc != base_domain:
             continue
-        clean_href = href.split('#')[0]
-
-        if clean_href.lower().rsplit('?', 1)[0].endswith('.pdf'):
-            title = a.get_text().strip() or clean_href.split('/')[-1]
-            combined = title + ' ' + clean_href
-
-            if any(j in combined.lower() for j in PDF_JUNK):
+        if href.lower().rsplit('?', 1)[0].endswith('.pdf'):
+            title = a.get_text().strip() or href.split('/')[-1]
+            combo = (title + ' ' + href).lower()
+            if any(j in combo for j in PDF_JUNK):
                 continue
+            # PDF берём, если это каталог или картонная тема
+            if is_cardboard(combo) or 'каталог' in combo or 'catalog' in combo:
+                pdfs.append({'name': title, 'url': fix_url(href)})
 
-            # Должен быть картон/МГК/туба, и желательно новогодний контекст
-            if is_material_match(combined):
-                page_pdfs.append({'name': title, 'url': fix_url(clean_href)})
-
-    # Изображения
+    # --- Изображения (с учётом lazy-load) ---
     for img in soup.find_all('img'):
-        src = img.get('src') or img.get('data-src') or img.get('data-original') or img.get('data-lazy-src')
+        src = (img.get('src') or img.get('data-src') or
+               img.get('data-original') or img.get('data-lazy-src'))
         if not src:
             continue
+        full = urljoin(page_url, src)
+        low = full.lower()
 
-        full_img_url = urljoin(page_url, src)
-        img_lower = full_img_url.lower()
-
-        if any(junk in img_lower for junk in UI_JUNK) or img_lower.endswith('.svg'):
+        if any(j in low for j in UI_JUNK) or low.endswith('.svg'):
+            continue
+        if not any(ext in low for ext in ['.jpg', '.jpeg', '.png', '.webp']):
             continue
 
-        if not any(ext in img_lower for ext in ['.jpg', '.jpeg', '.png', '.webp']):
-            continue
+        alt = (img.get('alt') or img.get('title') or '').strip()
+        name = alt if alt else full.split('/')[-1].split('?')[0]
 
-        alt = img.get('alt', '').strip() or img.get('title', '').strip()
-        name = alt if alt else full_img_url.split('/')[-1].split('?')[0]
+        # Проверяем: alt + имя файла + URL страницы (контекст раздела)
+        context = f"{alt} {full} {page_url}"
+        if is_cardboard(context):
+            imgs.append({'name': name, 'url': fix_url(full)})
 
-        # Также проверяем контекст соседних элементов (родительский блок с текстом)
-        parent_text = ''
-        try:
-            parent = img.find_parent()
-            if parent:
-                parent_text = parent.get_text(separator=' ').strip()[:200]
-        except Exception:
-            pass
-
-        combined = f"{name} {full_img_url} {parent_text}"
-
-        if is_material_match(combined):
-            page_imgs.append({'name': name, 'url': fix_url(full_img_url)})
-
-    return page_pdfs, page_imgs
+    return pdfs, imgs
 
 
-def deep_full_website_scan(start_url):
+def deep_scan(start_url):
     base_domain = urlparse(start_url).netloc
-    first_soup = fetch_page_soup(start_url)
-    if not first_soup:
+    soup = fetch_soup(start_url)
+    if not soup:
         return None, None
 
-    # Ищем разделы, посвящённые именно нужным материалам
-    catalog_urls = {start_url}
-    priority_urls = set()
-
-    for a in first_soup.find_all('a', href=True):
-        href = urljoin(start_url, a['href'])
+    pages = {start_url}
+    for a in soup.find_all('a', href=True):
+        href = urljoin(start_url, a['href']).split('#')[0]
         if urlparse(href).netloc != base_domain:
             continue
-        href_clean = href.split('#')[0]
-        href_lower = href_clean.lower()
-        link_text = a.get_text().lower()
+        if is_cardboard_section(href, a.get_text()):
+            pages.add(href)
 
-        combined = href_lower + ' ' + link_text
+    # Приоритет — явно картонным разделам
+    ordered = sorted(pages, key=lambda u: 0 if any(w in u.lower() for w in CARDBOARD_WORDS) else 1)
+    targets = ordered[:35]
 
-        # Приоритетные разделы - явно про картон/МГК/туба
-        if is_material_match(combined):
-            priority_urls.add(href_clean)
-        # Общие разделы каталога (тоже стоит заглянуть)
-        elif any(k in href_lower for k in ['catalog', 'katalog', 'product', 'category', 'upakovka', 'podarki', '202']):
-            catalog_urls.add(href_clean)
-
-    # Сначала приоритет на целевые страницы материалов, потом общий каталог
-    urls_to_scan = list(priority_urls) + list(catalog_urls)
-    urls_to_scan = list(dict.fromkeys(urls_to_scan))[:40]  # до 40 страниц, без дублей
-
-    all_pdfs = []
-    all_imgs = []
-
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_url = {executor.submit(parse_single_page, url, base_domain): url for url in urls_to_scan}
-        for future in as_completed(future_to_url):
+    all_pdfs, all_imgs = [], []
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = {ex.submit(parse_page, u, base_domain): u for u in targets}
+        for f in as_completed(futures):
             try:
-                pdfs, imgs = future.result()
-                all_pdfs.extend(pdfs)
-                all_imgs.extend(imgs)
+                p, i = f.result()
+                all_pdfs.extend(p)
+                all_imgs.extend(i)
             except Exception:
                 continue
 
-    unique_pdfs = list({v['url']: v for v in all_pdfs}.values())
-    unique_imgs = list({v['url']: v for v in all_imgs}.values())
+    return (list({v['url']: v for v in all_pdfs}.values()),
+            list({v['url']: v for v in all_imgs}.values()))
 
-    return unique_pdfs, unique_imgs
 
 # =========================================================
 # 🖥 ИНТЕРФЕЙС
 # =========================================================
 
-st.set_page_config(page_title="Поиск картонной упаковки ЕАЭС", layout="wide", page_icon="📦")
+st.set_page_config(page_title="Картонная упаковка ЕАЭС", layout="wide", page_icon="📦")
 
-st.title("📦 Поиск новогодней упаковки: Картон / МГК / Тубы")
-st.caption(
-    "Инструмент ищет **только** картонную упаковку, микрогофрокартон (МГК), "
-    "переплётный картон и тубы для новогодних подарков. Введите название компании."
-)
+st.title("📦 Поиск новогодней упаковки: картон / МГК / переплёт / тубы")
+st.caption("Жесть, текстиль, дерево, пластик и мягкая игрушка автоматически исключаются.")
 
 query = st.text_input("Название компании:", placeholder="Рубин")
 
 if query:
-    with st.spinner(f"🔎 Анализируем «{query}»: ищем картон, МГК и тубы..."):
+    with st.spinner(f"Анализируем картонные разделы каталога «{query}»..."):
         sites = find_official_site(query)
+        target, pdfs, imgs = None, None, None
 
-        target_site = None
-        pdfs, imgs = None, None
-
-        for site in sites:
-            res_pdfs, res_imgs = deep_full_website_scan(site)
-            if res_imgs or res_pdfs:
-                target_site = site
-                pdfs, imgs = res_pdfs, res_imgs
+        for s in sites:
+            p, i = deep_scan(s)
+            if p or i:
+                target, pdfs, imgs = s, p, i
                 break
 
-        if target_site and (pdfs or imgs):
-            st.success(f"✅ Проанализирован сайт: **{target_site}**")
+    if target:
+        st.success(f"✅ Сайт: **{target}**")
 
-            c1, c2 = st.columns([1, 1])
+        c1, c2 = st.columns(2)
 
-            with c1:
-                st.subheader(f"📄 PDF Каталоги ({len(pdfs)} шт.)")
-                if pdfs:
-                    for p in pdfs:
-                        st.markdown(f"📎 **[{p['name']}]({p['url']})**")
-                else:
-                    st.info("PDF-каталоги по картону/МГК/тубам не найдены.")
+        with c1:
+            st.subheader(f"📄 PDF-каталоги ({len(pdfs)})")
+            if pdfs:
+                for p in pdfs:
+                    st.markdown(f"📎 **[{p['name']}]({p['url']})**")
+            else:
+                st.info("PDF не найдены.")
 
-            with c2:
-                st.subheader(f"🖼 Картон / МГК / Тубы ({len(imgs)} шт.)")
-                if imgs:
-                    zip_io = io.BytesIO()
-                    with zipfile.ZipFile(zip_io, 'w') as zf:
-                        for idx, im in enumerate(imgs[:300]):
-                            try:
-                                r = requests.get(im['url'], timeout=4, verify=False).content
-                                ext = 'jpg'
-                                if '.png' in im['url'].lower():
-                                    ext = 'png'
-                                elif '.webp' in im['url'].lower():
-                                    ext = 'webp'
-                                zf.writestr(f"cardboard_item_{idx+1}.{ext}", r)
-                            except Exception:
-                                continue
+        with c2:
+            st.subheader(f"📦 Картон / МГК / тубы ({len(imgs)})")
+            if imgs:
+                zip_io = io.BytesIO()
+                with zipfile.ZipFile(zip_io, 'w') as zf:
+                    for idx, im in enumerate(imgs[:300]):
+                        try:
+                            data = requests.get(im['url'], timeout=4, verify=False).content
+                            ext = 'png' if '.png' in im['url'].lower() else \
+                                  'webp' if '.webp' in im['url'].lower() else 'jpg'
+                            safe_name = ''.join(ch for ch in im['name'] if ch.isalnum() or ch in ' -_')[:40]
+                            zf.writestr(f"{idx+1:03d}_{safe_name or 'karton'}.{ext}", data)
+                        except Exception:
+                            continue
 
-                    st.download_button(
-                        label=f"📥 СКАЧАТЬ ВСЕ {len(imgs)} ФОТО В ZIP",
-                        data=zip_io.getvalue(),
-                        file_name=f"cardboard_catalog_{urlparse(target_site).netloc}.zip",
-                        mime="application/zip"
-                    )
+                st.download_button(
+                    f"📥 СКАЧАТЬ {len(imgs)} ФОТО (ZIP)",
+                    zip_io.getvalue(),
+                    file_name=f"karton_{urlparse(target).netloc}.zip",
+                    mime="application/zip"
+                )
 
-                    st.write("---")
-                    grid = st.columns(4)
-                    for i, im in enumerate(imgs[:12]):
-                        grid[i % 4].image(im['url'], caption=im['name'][:25], use_container_width=True)
-                else:
-                    st.info("Изображения картонной упаковки/МГК/туб не найдены.")
-        else:
-            st.error(f"❌ Не удалось найти релевантный контент по картону/МГК/тубам для «{query}».")
+                st.write("---")
+                grid = st.columns(4)
+                for i, im in enumerate(imgs[:12]):
+                    grid[i % 4].image(im['url'], caption=im['name'][:25], use_container_width=True)
+            else:
+                st.info("Картонной упаковки не найдено.")
+    else:
+        st.error("❌ Данные извлечь не удалось. Уточните название компании.")
