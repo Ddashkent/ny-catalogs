@@ -1,410 +1,200 @@
 import io
 import re
-from urllib.parse import urljoin, urlparse
 import zipfile
-
-from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
 import requests
+from bs4 import BeautifulSoup
 import streamlit as st
 
 # ==========================================
-# 📚 ВСТРОЕННЫЙ РЕЕСТР КРУПНЕЙШИХ ПРОИЗВОДИТЕЛЕЙ ЕАЭС
+# 🏆 БАЗА ТИТАНОВ РЫНКА (ПРЯМЫЕ ССЫЛКИ)
 # ==========================================
-EAEU_MANUFACTURERS_DB = {
+OFFICIAL_DIRECTORY = {
+    'рубин': 'https://rubin-tg.ru',
+    'академия шоколада': 'https://academy-chocolate.ru',
     'спартак': 'https://spartak.by',
     'коммунарка': 'https://www.kommunarka.by',
     'рахат': 'https://rakhat.kz',
+    'миракс': 'https://mirax-gifts.ru',
+    'дилявер': 'https://dilyaver.com',
+    'росшоколад': 'https://roschocolate.ru',
+    'москондитер': 'https://mosconditer.ru',
     'красный октябрь': 'https://www.uniconf.ru',
-    'рот фронт': 'https://www.uniconf.ru',
-    'бабаевский': 'https://www.uniconf.ru',
     'акконд': 'https://akkond.ru',
     'славянка': 'https://slavyanka.ru',
-    'атаг': 'https://atag.ru',
-    'невский кондитер': 'https://krascon.ru',
-    'победа': 'https://pobeda.conf',
-    'эссен': 'https://essenproduction.com',
 }
 
-# ==========================================
-# 🛑 СТРОГИЕ ФИЛЬТРЫ И ИСКЛЮЧЕНИЯ
-# ==========================================
+# Ключевые слова для подтверждения, что сайт «тот самый»
+VERIFICATION_KEYWORDS = ['подар', 'упаков', 'каталог', 'конфет', 'новогод']
 
-# Черный список для PDF (Юридический и административный мусор)
-PDF_EXCLUDE_KEYWORDS = [
-    'политик',
-    'конфиденц',
-    'согласи',
-    'персональн',
-    'обработк',
-    'устав',
-    'лицензи',
-    'сертификат',
-    'реквизит',
-    'договор',
-    'оферт',
-    'паспорт',
-    'инструкци',
-    'положение',
-    'стандарт',
-    'отчет',
-    'бухгалтер',
-    'финанс',
-    'соут',
-    'гост',
-    'декларац',
-    'privacy',
-    'policy',
-    'consent',
-    'terms',
-    'license',
-    'report',
-]
+# Исключения для PDF (полный отсев мусора)
+PDF_IGNORE = ['политика', 'обработк', 'персональн', 'устав', 'реквизит', 'лиценз', 'согласие', 'privacy', 'sout', 'special-assessment']
 
-# Черный список для Изображений (Интерфейс, логотипы, баннеры)
-IMG_EXCLUDE_KEYWORDS = [
-    'logo',
-    'icon',
-    'banner',
-    'button',
-    'btn',
-    'social',
-    'vk',
-    'fb',
-    'instagram',
-    'telegram',
-    'cart',
-    'avatar',
-    'payment',
-    'header',
-    'footer',
-    'pixel',
-    'mastercard',
-    'visa',
-    'mir',
-    'arrow',
-    'bg',
-    'background',
-    'slider',
-    'widget',
-    'thumb_small',
-    'sprite',
-    'placeholder',
-]
-
-# Белый список ключевых слов (Новый Год и Упаковка)
-TARGET_KEYWORDS = [
-    'новогод',
-    'новый год',
-    'подар',
-    'упаков',
-    'каталог',
-    '2024',
-    '2025',
-    '2026',
-    'короб',
-    'жесть',
-    'картон',
-    'туб',
-    'текстиль',
-    'дерев',
-    'символ',
-    'сладк',
-    'набор',
-    'gift',
-    'box',
-    'catalog',
-    'ny',
-    'newyear',
-    'pack',
-]
+# Целевые слова для поиска (Новый Год 2025 / Упаковка)
+TARGET_WORDS = ['новогод', '2025', '2024', 'подар', 'упаков', 'короб', 'туба', 'жесть', 'картон', 'каталог', 'catalog', 'gift', 'new-year']
 
 HEADERS = {
-    'User-Agent': (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,'
-        ' like Gecko) Chrome/122.0.0.0 Safari/537.36'
-    )
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
 # ==========================================
-# ⚙️ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# 🛠 БЛОК ЛОГИКИ ПОИСКА
 # ==========================================
 
-
-def transliterate(text):
-  """Перевод кириллицы в латиницу для подбора доменов"""
-  translit_dict = {
-      'а': 'a',
-      'б': 'b',
-      'в': 'v',
-      'г': 'g',
-      'д': 'd',
-      'е': 'e',
-      'ё': 'yo',
-      'ж': 'zh',
-      'з': 'z',
-      'и': 'i',
-      'й': 'y',
-      'к': 'k',
-      'л': 'l',
-      'м': 'm',
-      'н': 'n',
-      'о': 'o',
-      'п': 'p',
-      'р': 'r',
-      'с': 's',
-      'т': 't',
-      'у': 'u',
-      'ф': 'f',
-      'х': 'h',
-      'ц': 'ts',
-      'ч': 'ch',
-      'ш': 'sh',
-      'щ': 'sch',
-      'ъ': '',
-      'ы': 'y',
-      'ь': '',
-      'э': 'e',
-      'ю': 'yu',
-      'я': 'ya',
-  }
-  clean = text.lower().strip()
-  return ''.join(translit_dict.get(c, c) for c in clean if c.isalnum())
-
-
-def find_target_domain(query):
-  """Прямой подбор домена без использования поисковиков"""
-  query_clean = query.lower().strip()
-
-  # 1. Если введен прямой URL (например: spartak.by или https://site.ru)
-  if '.' in query_clean and not ' ' in query_clean:
-    if not query_clean.startswith(('http://', 'https://')):
-      return f'https://{query_clean}'
-    return query_clean
-
-  # 2. Проверка по встроенной базе ЕАЭС
-  for key, url in EAEU_MANUFACTURERS_DB.items():
-    if key in query_clean:
-      return url
-
-  # 3. Прямая проверка доменных зон ЕАЭС (.by, .ru, .kz, .com)
-  slug = transliterate(query_clean)
-  if not slug:
-    return None
-
-  tlds = ['by', 'ru', 'kz', 'com', 'co.kg', 'am']
-  for tld in tlds:
-    test_url = f'https://{slug}.{tld}'
+def check_site_relevance(url):
+    """Проверяет, действительно ли сайт занимается подарками/упаковкой"""
     try:
-      resp = requests.head(
-          test_url, headers=HEADERS, timeout=3, allow_redirects=True
-      )
-      if resp.status_code < 400:
-        return resp.url
-    except Exception:
-      continue
+        r = requests.get(url, headers=HEADERS, timeout=5)
+        soup = BeautifulSoup(r.text, 'lxml')
+        text = soup.get_text().lower()
+        return any(word in text for word in VERIFICATION_KEYWORDS)
+    except:
+        return False
 
-  return None
-
-
-def is_pdf_valid(title, url):
-  """Жесткий фильтр для PDF"""
-  combined = (title + ' ' + url).lower()
-
-  # Отбраковываем юридический мусор
-  if any(bad in combined for bad in PDF_EXCLUDE_KEYWORDS):
-    return False
-
-  # Проверяем наличие целевых слов или цифр текущего/следующего года
-  if any(good in combined for good in TARGET_KEYWORDS) or re.search(
-      r'20?2[4-6]', combined
-  ):
-    return True
-
-  return False
-
-
-def is_img_valid(alt, src):
-  """Жесткий фильтр для изображений упаковки и подарков"""
-  combined = (alt + ' ' + src).lower()
-
-  # Исключаем системный мусор и векторную графику
-  if any(bad in combined for bad in IMG_EXCLUDE_KEYWORDS) or combined.endswith(
-      '.svg'
-  ):
-    return False
-
-  # Проверяем на привязку к упаковке/подаркам
-  if any(good in combined for good in TARGET_KEYWORDS):
-    return True
-
-  return False
-
-
-def get_soup(url):
-  """Скачивание страницы"""
-  try:
-    resp = requests.get(url, headers=HEADERS, timeout=10)
-    resp.raise_for_status()
-    return BeautifulSoup(resp.text, 'html.parser')
-  except Exception:
+def resolve_domain(query):
+    query = query.lower().strip()
+    
+    # 1. Если это URL
+    if '.' in query and ' ' not in query:
+        return f"https://{query.replace('https://', '').replace('http://', '')}"
+    
+    # 2. Поиск в реестре гигантов
+    for name, domain in OFFICIAL_DIRECTORY.items():
+        if name in query:
+            return domain
+            
+    # 3. Умный перебор зон ЕАЭС с верификацией контента
+    base_name = query.replace(' ', '-')
+    # Также пробуем транслит для сложных названий
+    variants = [base_name, base_name.replace('-', ''), 'akademiya-shokolada' if 'академия' in query else base_name]
+    
+    tlds = ['ru', 'by', 'kz', 'com', 'ru']
+    for v in variants:
+        for tld in tlds:
+            test_url = f"https://{v}.{tld}"
+            try:
+                # Проверяем доступность и содержание
+                resp = requests.head(test_url, headers=HEADERS, timeout=2, allow_redirects=True)
+                if resp.status_code < 400:
+                    real_url = resp.url
+                    if check_site_relevance(real_url):
+                        return real_url
+            except:
+                continue
     return None
 
-
 # ==========================================
-# 🕷 ОСНОВНОЙ КРАУЛЕР
+# 🕷 КРАУЛЕР (СБОР ДАННЫХ)
 # ==========================================
 
+def get_data(site_url):
+    try:
+        res = requests.get(site_url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(res.text, 'lxml')
+    except Exception as e:
+        st.error(f"Ошибка доступа: {e}")
+        return
 
-def process_website(start_url):
-  domain = urlparse(start_url).netloc
-  soup = get_soup(start_url)
+    # Находим разделы каталогов (авто-переход)
+    links_to_check = {site_url}
+    for a in soup.find_all('a', href=True):
+        href = urljoin(site_url, a['href'])
+        txt = a.get_text().lower()
+        if any(w in txt or w in href for w in ['catalog', 'katalog', 'podarki', 'novogod']):
+            if urlparse(href).netloc == urlparse(site_url).netloc:
+                links_to_check.add(href)
+    
+    links_to_check = list(links_to_check)[:6] # Ограничение глубины
 
-  if not soup:
-    st.error(
-        f'Не удалось подключиться к сайту {start_url}. Проверьте правильность'
-        ' адреса.'
-    )
-    return
+    pdfs = []
+    imgs = []
+    
+    prog = st.progress(0)
+    for i, link in enumerate(links_to_check):
+        try:
+            r = requests.get(link, headers=HEADERS, timeout=7)
+            s = BeautifulSoup(r.text, 'lxml')
+            
+            # Собираем PDF
+            for a in s.find_all('a', href=True):
+                url = urljoin(link, a['href'])
+                name = a.get_text().strip()
+                if url.lower().endswith('.pdf'):
+                    # Фильтр: Должен быть новогодним и не быть юридическим мусором
+                    if any(w in (name+url).lower() for w in TARGET_WORDS):
+                        if not any(bad in (name+url).lower() for bad in PDF_IGNORE):
+                            pdfs.append({'name': name if len(name) > 3 else "Новогодний каталог", 'url': url})
+            
+            # Собираем Фото упаковки
+            for im in s.find_all('img', src=True):
+                src = urljoin(link, im['src'])
+                alt = im.get('alt', '').strip()
+                # Фильтр: только упаковка/подарки, игнорируем лого и иконки
+                if any(w in (alt+src).lower() for w in TARGET_WORDS):
+                    if not any(bad in src.lower() for bad in ['logo', 'icon', 'banner', 'button', 'cart', 'social']):
+                        imgs.append({'name': alt if alt else src.split('/')[-1], 'url': src})
+        except:
+            continue
+        prog.progress((i + 1) / len(links_to_check))
 
-  # Поиск разделов каталога и подарков
-  pages_to_scan = {start_url}
-  for a in soup.find_all('a', href=True):
-    href = urljoin(start_url, a['href'])
-    text = a.get_text().strip().lower()
-
-    if urlparse(href).netloc == domain:
-      if any(k in text or k in href.lower() for k in TARGET_KEYWORDS):
-        pages_to_scan.add(href)
-
-  scan_list = list(pages_to_scan)[:8]  # Обходим до 8 целевых страниц
-
-  found_pdfs = []
-  found_images = []
-
-  progress_bar = st.progress(0)
-  status_info = st.empty()
-
-  for idx, page_url in enumerate(scan_list):
-    status_info.text(
-        f'Сканирование раздела {idx+1} из {len(scan_list)}: {page_url}'
-    )
-    page_soup = get_soup(page_url) if page_url != start_url else soup
-    if not page_soup:
-      continue
-
-    # 1. Поиск PDF
-    for a in page_soup.find_all('a', href=True):
-      href = urljoin(page_url, a['href'])
-      link_text = a.get_text().strip()
-
-      if href.lower().rsplit('?', 1)[0].endswith('.pdf'):
-        if is_pdf_valid(link_text, href):
-          item = {
-              'name': (
-                  link_text if len(link_text) > 3 else href.split('/')[-1]
-              ),
-              'url': href,
-          }
-          if item not in found_pdfs:
-            found_pdfs.append(item)
-
-    # 2. Поиск изображений упаковки/подарков
-    for img in page_soup.find_all('img', src=True):
-      src = urljoin(page_url, img['src'])
-      alt = img.get('alt', '').strip()
-
-      if is_img_valid(alt, src):
-        item = {'name': alt if alt else src.split('/')[-1], 'url': src}
-        if item not in found_images:
-          found_images.append(item)
-
-    progress_bar.progress((idx + 1) / len(scan_list))
-
-  status_info.empty()
-  progress_bar.empty()
-
-  # ==========================================
-  # 📊 РЕЗУЛЬТАТЫ ПОИСКА
-  # ==========================================
-  st.divider()
-
-  # PDF Раздел
-  st.subheader('📄 Найденные PDF-каталоги')
-  if found_pdfs:
-    for pdf in found_pdfs:
-      st.success(f"📥 **[{pdf['name']}]({pdf['url']})**")
-  else:
-    st.info('Новогодние PDF-каталоги не найдены.')
-
-  # Картинки и ZIP
-  st.subheader(
-      f'🖼 Изображения упаковки и подарков (Найдено: {len(found_images)})'
-  )
-  if found_images:
-    cols = st.columns(4)
-    for i, img in enumerate(found_images[:8]):
-      cols[i % 4].image(
-          img['url'], caption=img['name'][:30], use_container_width=True
-      )
-
-    st.write('---')
-    if st.button('📦 Создать ZIP-архив со всеми изображениями'):
-      with st.spinner('Сборка и сжатие файлов...'):
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(
-            zip_buffer, 'a', zipfile.ZIP_DEFLATED, False
-        ) as zip_file:
-          for i, img in enumerate(found_images):
-            try:
-              res = requests.get(img['url'], headers=HEADERS, timeout=6)
-              if res.status_code == 200:
-                ext = '.jpg'
-                if '.png' in img['url'].lower():
-                  ext = '.png'
-                elif '.webp' in img['url'].lower():
-                  ext = '.webp'
-
-                clean_title = re.sub(r'[^\w\-_.]', '_', img['name'])
-                filename = f'{i+1:02d}_{clean_title[:35]}{ext}'
-                zip_file.writestr(filename, res.content)
-            except Exception:
-              continue
-
-        st.download_button(
-            label='💾 Скачать ZIP-архив',
-            data=zip_buffer.getvalue(),
-            file_name=f"catalog_{domain.replace('.', '_')}.zip",
-            mime='application/zip',
-        )
-  else:
-    st.warning('Изображения целевой новогодней упаковки/подарков не найдены.')
-
+    # Уникализация списков
+    pdfs = [dict(t) for t in {tuple(d.items()) for d in pdfs}]
+    imgs = [dict(t) for t in {tuple(d.items()) for d in imgs}]
+    
+    return pdfs, imgs
 
 # ==========================================
 # 🖥 ИНТЕРФЕЙС
 # ==========================================
-st.set_page_config(
-    page_title='Новогодние каталоги и упаковка ЕАЭС',
-    page_icon='🎁',
-    layout='wide',
-)
 
-st.title('🎁 Поиск новогодних каталогов и упаковки ЕАЭС')
-st.caption(
-    'Введите название компании (Спартак, Коммунарка, Рахат) или точный адрес'
-    ' сайта (spartak.by, akkond.ru).'
-)
+st.set_page_config(page_title="NY Catalog Finder Pro", page_icon="🎁", layout="wide")
+st.title("🎁 Поиск упаковки и подарков ЕАЭС")
+st.markdown("Поиск по базе производителей **Беларуси, России и Казахстана**.")
 
-user_query = st.text_input('Заказчик / Компания / Сайт:', value='')
+query = st.text_input("Введите название компании (например: Рубин, Академия шоколада, Спартак):", placeholder="Рубин")
 
-if user_query:
-  target_url = find_target_domain(user_query)
-
-  if target_url:
-    st.success(f'🌐 Наден сайт компании: **{target_url}**')
-    process_website(target_url)
-  else:
-    st.error(
-        f'Не удалось автоматически определить домен для «{user_query}».'
-        ' Пожалуйста, введите точный адрес сайта (например: spartak.by).'
-    )
+if query:
+    with st.spinner(f"Ищем официальный сайт для '{query}'..."):
+        site = resolve_domain(query)
+        
+    if site:
+        st.success(f"✅ Найден официальный сайт: {site}")
+        
+        pdfs, imgs = get_data(site)
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.subheader("📄 PDF Каталоги")
+            if pdfs:
+                for p in pdfs:
+                    st.info(f"👉 [{p['name']}]({p['url']})")
+            else:
+                st.write("Каталоги в PDF не найдены.")
+                
+        with col2:
+            st.subheader("🖼 Фото упаковки / подарков")
+            if imgs:
+                st.write(f"Найдено изображений: {len(imgs)}")
+                
+                # Создание ZIP
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'a', zipfile.ZIP_DEFLATED) as zf:
+                    for i, im in enumerate(imgs[:50]): # Лимит 50 фото
+                        try:
+                            res = requests.get(im['url'], timeout=5).content
+                            ext = im['url'].split('.')[-1][:3]
+                            if ext not in ['jpg', 'png', 'web']: ext = 'jpg'
+                            zf.writestr(f"gift_{i}.{ext}", res)
+                        except: continue
+                
+                st.download_button("📥 Скачать архив с картинками", zip_buf.getvalue(), "catalog_images.zip", "application/zip")
+                
+                # Превью
+                c = st.columns(3)
+                for idx, im in enumerate(imgs[:6]):
+                    c[idx%3].image(im['url'], use_container_width=True)
+            else:
+                st.write("Изображения не найдены.")
+    else:
+        st.error("❌ Не удалось найти официальный сайт. Попробуйте ввести точный адрес (например: rubin-tg.ru)")
