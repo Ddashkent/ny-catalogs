@@ -27,8 +27,8 @@ FIXED_SITES = {
 }
 
 WHITE_LIST = [
-    "картон", "мгк", "микрогофр", "гофр", "переплет", "переплёт",
-    "кашир", "туб", "тубус", "tube", "box", "коробка", "футляр",
+    "картон", "мгк", "микрогофр", "гофр", "переплет", "переплёт", "кашир",
+    "туб", "тубус", "tube", "box", "коробка", "футляр",
     "2024", "2025", "2026", "2027", "2028", "каталог", "catalog",
 ]
 BLACK_LIST = [
@@ -134,7 +134,6 @@ def scan_page(url, domain):
 
 st.set_page_config(page_title="Картонный поиск 2027", layout="wide", page_icon="📦")
 st.title("📦 Поиск новогодней упаковки (картон / МГК / тубы)")
-st.caption("Запускайте с ПК в РФ. Streamlit Cloud часто не достучится до сайтов .by/.ru.")
 
 query = st.text_input("Компания или сайт", placeholder="Коммунарка / rubin-2000.ru")
 
@@ -144,11 +143,7 @@ if query:
     soup = get_soup(target_url)
 
     if not soup:
-        st.error(
-            f"Нет ответа от {target_url}. "
-            "Запустите приложение локально в РФ (`streamlit run app.py`), "
-            "не из Streamlit Cloud."
-        )
+        st.error(f"Нет ответа от {target_url}. Проверьте адрес и интернет.")
     else:
         domain = urlparse(target_url).netloc
         pages = {target_url}
