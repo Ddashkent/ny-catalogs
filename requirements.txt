@@ -1,6 +1,7 @@
-streamlit
-requests
-beautifulsoup4
-lxml
-pillow
-urllib3
+streamlit>=1.35
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+pillow>=10.0
+curl_cffi>=0.7
+ddgs>=9.0
