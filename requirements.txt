@@ -1,6 +1,6 @@
 streamlit
 requests
 beautifulsoup4
-lxml
-pillow
 duckduckgo-search
+pillow
+lxml
